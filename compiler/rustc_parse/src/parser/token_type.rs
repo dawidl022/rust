@@ -83,6 +83,7 @@ pub enum TokenType {
     KwCatch,
     KwConst,
     KwContinue,
+    KwContractDecls,
     KwContractEnsures,
     KwContractRequires,
     KwCrate,
@@ -220,6 +221,7 @@ impl TokenType {
             KwCatch,
             KwConst,
             KwContinue,
+            KwContractDecls,
             KwContractEnsures,
             KwContractRequires,
             KwCrate,
@@ -295,6 +297,7 @@ impl TokenType {
             TokenType::KwCatch => Some(kw::Catch),
             TokenType::KwConst => Some(kw::Const),
             TokenType::KwContinue => Some(kw::Continue),
+            TokenType::KwContractDecls => Some(kw::ContractDecls),
             TokenType::KwContractEnsures => Some(kw::ContractEnsures),
             TokenType::KwContractRequires => Some(kw::ContractRequires),
             TokenType::KwCrate => Some(kw::Crate),
@@ -509,6 +512,7 @@ macro_rules! exp {
     (Catch)          => { exp!(@kw, Catch,      KwCatch) };
     (Const)          => { exp!(@kw, Const,      KwConst) };
     (Continue)       => { exp!(@kw, Continue,   KwContinue) };
+    (ContractDecls)   => { exp!(@kw, ContractDecls, KwContractDecls) };
     (ContractEnsures)  => { exp!(@kw, ContractEnsures, KwContractEnsures) };
     (ContractRequires) => { exp!(@kw, ContractRequires, KwContractRequires) };
     (Crate)          => { exp!(@kw, Crate,      KwCrate) };

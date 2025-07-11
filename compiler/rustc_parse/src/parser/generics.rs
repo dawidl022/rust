@@ -13,6 +13,7 @@ use crate::errors::{
     WhereClauseBeforeTupleStructBodySugg,
 };
 use crate::exp;
+use crate::parser::AttemptLocalParseRecovery;
 
 enum PredicateKindOrStructBody {
     PredicateKind(ast::WherePredicateKind),
@@ -311,6 +312,18 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_contract(
         &mut self,
     ) -> PResult<'a, Option<rustc_ast::ptr::P<ast::FnContract>>> {
+        let declarations = if self.eat_keyword_noexpect(exp!(ContractDecls).kw) {
+            self.psess.gated_spans.gate(sym::contracts_internals, self.prev_token.span);
+            if let Some(decls) = self.parse_full_stmt(AttemptLocalParseRecovery::Yes)? {
+                let mut v = ThinVec::new();
+                v.push(decls);
+                v
+            } else {
+                Default::default()
+            }
+        } else {
+            Default::default()
+        };
         let requires = if self.eat_keyword_noexpect(exp!(ContractRequires).kw) {
             self.psess.gated_spans.gate(sym::contracts_internals, self.prev_token.span);
             let precond = self.parse_expr()?;
@@ -328,7 +341,7 @@ impl<'a> Parser<'a> {
         if requires.is_none() && ensures.is_none() {
             Ok(None)
         } else {
-            Ok(Some(rustc_ast::ptr::P(ast::FnContract { requires, ensures })))
+            Ok(Some(rustc_ast::ptr::P(ast::FnContract { declarations, requires, ensures })))
         }
     }
 

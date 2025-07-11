@@ -1373,7 +1373,8 @@ macro_rules! common_visitor_and_walkers {
         }
 
         pub fn walk_contract<$($lt,)? V: $Visitor$(<$lt>)?>(vis: &mut V, c: &$($lt)? $($mut)? FnContract) -> V::Result {
-            let FnContract { requires, ensures } = c;
+            let FnContract { declarations, requires, ensures } = c;
+            try_visit!(visit_stmts(vis, declarations));
             visit_opt!(vis, visit_expr, requires);
             visit_opt!(vis, visit_expr, ensures);
             V::Result::output()
