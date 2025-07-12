@@ -127,7 +127,6 @@ symbols! {
         Auto:               "auto",
         Builtin:            "builtin",
         Catch:              "catch",
-        ContractDecls:      "contract_decls",
         ContractEnsures:    "contract_ensures",
         ContractRequires:   "contract_requires",
         Default:            "default",

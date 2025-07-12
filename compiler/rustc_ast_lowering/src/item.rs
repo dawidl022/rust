@@ -1223,6 +1223,12 @@ impl<'hir> LoweringContext<'_, 'hir> {
         contract: Option<&FnContract>,
         body: impl FnOnce(&mut Self) -> hir::Expr<'hir>,
     ) -> hir::BodyId {
+        let contract_decls = if let Some(contract) = contract {
+            Some(self.lower_stmts(&contract.declarations).0)
+        } else {
+            None
+        };
+
         self.lower_body(|this| {
             let params =
                 this.arena.alloc_from_iter(decl.inputs.iter().map(|x| this.lower_param(x)));
@@ -1293,7 +1299,18 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 // Flatten the body into precond, then postcond, then wrapped body.
                 let wrapped_body = this.block_all(
                     body.span,
-                    this.arena.alloc_from_iter([precond, postcond].into_iter().flatten()),
+                    match contract_decls {
+                        Some(decls) => this.arena.alloc_from_iter(
+                            decls
+                                .into_iter()
+                                .map(|d| Some(*d))
+                                .chain([precond, postcond].into_iter())
+                                .flatten(),
+                        ),
+                        None => {
+                            this.arena.alloc_from_iter([precond, postcond].into_iter().flatten())
+                        }
+                    },
                     Some(body),
                 );
                 (params, this.expr_block(wrapped_body))

@@ -13,7 +13,6 @@ use crate::errors::{
     WhereClauseBeforeTupleStructBodySugg,
 };
 use crate::exp;
-use crate::parser::AttemptLocalParseRecovery;
 
 enum PredicateKindOrStructBody {
     PredicateKind(ast::WherePredicateKind),
@@ -312,24 +311,35 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_contract(
         &mut self,
     ) -> PResult<'a, Option<rustc_ast::ptr::P<ast::FnContract>>> {
-        let declarations = if self.eat_keyword_noexpect(exp!(ContractDecls).kw) {
+        let (declarations, requires) = if self.eat_keyword_noexpect(exp!(ContractRequires).kw) {
             self.psess.gated_spans.gate(sym::contracts_internals, self.prev_token.span);
-            if let Some(decls) = self.parse_full_stmt(AttemptLocalParseRecovery::Yes)? {
-                let mut v = ThinVec::new();
-                v.push(decls);
-                v
-            } else {
-                Default::default()
-            }
+            let mut decls_and_precond = self.parse_block()?;
+            // FIXME handle error properly
+            let precond = decls_and_precond.stmts.pop().unwrap();
+            let mut precond = match precond.kind {
+                rustc_ast::StmtKind::Expr(expr) => expr,
+                rustc_ast::StmtKind::Semi(expr) => expr,
+                _ => panic!("handle error later"),
+            };
+            precond.kind = ast::ExprKind::Closure(Box::new(ast::Closure {
+                binder: rustc_ast::ClosureBinder::NotPresent,
+                constness: rustc_ast::Const::No,
+                movability: rustc_ast::Movability::Movable,
+                capture_clause: rustc_ast::CaptureBy::Ref,
+                coroutine_kind: None,
+                fn_decl: Box::new(rustc_ast::FnDecl {
+                    inputs: Default::default(),
+                    // FIXME is span arg correct?
+                    output: rustc_ast::FnRetTy::Default(precond.span.shrink_to_hi()),
+                }),
+                fn_arg_span: precond.span.shrink_to_hi(),
+                fn_decl_span: precond.span.shrink_to_hi(),
+                body: precond.clone(),
+            }));
+            let decls = decls_and_precond.stmts;
+            (decls, Some(precond))
         } else {
-            Default::default()
-        };
-        let requires = if self.eat_keyword_noexpect(exp!(ContractRequires).kw) {
-            self.psess.gated_spans.gate(sym::contracts_internals, self.prev_token.span);
-            let precond = self.parse_expr()?;
-            Some(precond)
-        } else {
-            None
+            (Default::default(), None)
         };
         let ensures = if self.eat_keyword_noexpect(exp!(ContractEnsures).kw) {
             self.psess.gated_spans.gate(sym::contracts_internals, self.prev_token.span);
