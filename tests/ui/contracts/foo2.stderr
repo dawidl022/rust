@@ -1,5 +1,5 @@
 warning: the feature `contracts` is incomplete and may not be safe to use and/or cause compiler crashes
-  --> $DIR/foo2.rs:2:12
+  --> $DIR/foo2.rs:3:12
    |
 LL | #![feature(contracts)]
    |            ^^^^^^^^^
