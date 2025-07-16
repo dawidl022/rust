@@ -13,14 +13,9 @@ fn contracts_enabled() -> bool {
     true
 }
 
-fn contract_check_requires<C: Fn() -> bool + Copy>(cond: Option<C>) {
-    match cond {
-        Some(cond) => {
-            if !cond() {
-                panic!("failed requires check");
-            }
-        }
-        None => {}
+fn contract_check_requires<C: Fn() -> bool + Copy>(cond: C) {
+    if !cond() {
+        panic!("failed requires check");
     }
 }
 
@@ -47,16 +42,15 @@ fn contract_check_ensures<C: Fn(&Ret) -> bool + Copy, Ret>(cond: Option<C>, ret:
 // test how they would be lowered
 
 fn foo(x: u32) -> u32 {
-    let (pre, post) = if contracts_enabled() {
+    let post = if contracts_enabled() {
         let y = 2 * x;
-        let pre = Some(|| true);
-        let post = Some(build_check_ensures({ move |ret| *ret == y }));
-        (pre, post)
+        // call requires check here to avoid borrow checker issues
+        contract_check_requires(|| y > 0);
+        Some(build_check_ensures({ move |ret| *ret == y }))
     } else {
-        (None, None)
+        None
     };
 
-    contract_check_requires(pre);
     contract_check_ensures(post, { 2 * x })
 }
 
