@@ -2198,7 +2198,11 @@ impl<'hir> LoweringContext<'_, 'hir> {
         self.arena.alloc(self.expr_call_lang_item_fn_mut(span, lang_item, args))
     }
 
-    fn expr_lang_item_path(&mut self, span: Span, lang_item: hir::LangItem) -> hir::Expr<'hir> {
+    pub(super) fn expr_lang_item_path(
+        &mut self,
+        span: Span,
+        lang_item: hir::LangItem,
+    ) -> hir::Expr<'hir> {
         self.expr(span, hir::ExprKind::Path(hir::QPath::LangItem(lang_item, self.lower_span(span))))
     }
 

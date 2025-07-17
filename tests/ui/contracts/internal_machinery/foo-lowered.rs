@@ -8,7 +8,7 @@ extern crate core;
 // checks that variable declarations are lowered properly, with the ability to
 // access function parameters
 
-/// dummy function mocking contracts_enabled compiler intrinsic
+/// dummy function mocking [contract_checks] compiler intrinsic
 fn contracts_enabled() -> bool {
     true
 }
