@@ -1247,6 +1247,11 @@ impl<'hir> LoweringContext<'_, 'hir> {
             if let Some(contract) = contract {
                 match (&contract.requires, &contract.ensures) {
                     (Some(req), Some(ens)) => {
+                        // The order in which things are lowered is important!
+                        // I.e to refer to variables in contract_decls from
+                        // postcond/precond, we must lower it first!
+                        let contract_decls = this.lower_stmts(&contract.declarations).0;
+
                         let (req_span, precond) = {
                             // Lower the precondition check intrinsic.
                             let lowered_req = this.lower_expr_mut(&req);
@@ -1279,8 +1284,6 @@ impl<'hir> LoweringContext<'_, 'hir> {
                         };
 
                         let contract_check = {
-                            let contract_decls = this.lower_stmts(&contract.declarations).0;
-
                             let stmts = this.arena.alloc_from_iter(
                                 contract_decls.into_iter().map(|d| *d).chain([precond].into_iter()),
                             );
@@ -1295,9 +1298,10 @@ impl<'hir> LoweringContext<'_, 'hir> {
                                 this.block_all(req_span, stmts, Some(postcond_checker));
                             let then_block = this.arena.alloc(this.expr_block(&then_block_stmts));
 
-                            let none_expr = this.arena.alloc(this.expr_lang_item_path(
+                            let none_expr = this.arena.alloc(this.expr_enum_variant_lang_item(
                                 ens_span,
                                 rustc_hir::lang_items::LangItem::OptionNone,
+                                Default::default(),
                             ));
                             let else_block = this.block_expr(none_expr);
                             let else_block = this.arena.alloc(this.expr_block(else_block));
