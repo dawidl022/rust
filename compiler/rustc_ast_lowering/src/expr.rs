@@ -2170,6 +2170,43 @@ impl<'hir> LoweringContext<'_, 'hir> {
         self.expr(span, hir::ExprKind::Call(e, args))
     }
 
+    pub(super) fn expr_struct(
+        &mut self,
+        span: Span,
+        path: &'hir hir::QPath<'hir>,
+        fields: &'hir [hir::ExprField<'hir>],
+    ) -> hir::Expr<'hir> {
+        self.expr(span, hir::ExprKind::Struct(path, fields, rustc_hir::StructTailExpr::None))
+    }
+
+    pub(super) fn expr_enum_variant(
+        &mut self,
+        span: Span,
+        path: &'hir hir::QPath<'hir>,
+        fields: &'hir [hir::Expr<'hir>],
+    ) -> hir::Expr<'hir> {
+        let fields = self.arena.alloc_from_iter(fields.into_iter().enumerate().map(|(i, f)| {
+            hir::ExprField {
+                hir_id: self.next_id(),
+                ident: Ident::with_dummy_span(Symbol::intern(&i.to_string())),
+                expr: f,
+                span: f.span,
+                is_shorthand: false,
+            }
+        }));
+        self.expr_struct(span, path, fields)
+    }
+
+    pub(super) fn expr_enum_variant_lang_item(
+        &mut self,
+        span: Span,
+        lang_item: hir::LangItem,
+        fields: &'hir [hir::Expr<'hir>],
+    ) -> hir::Expr<'hir> {
+        let path = self.arena.alloc(self.lang_item_path(span, lang_item));
+        self.expr_enum_variant(span, path, fields)
+    }
+
     pub(super) fn expr_call(
         &mut self,
         span: Span,
@@ -2203,7 +2240,16 @@ impl<'hir> LoweringContext<'_, 'hir> {
         span: Span,
         lang_item: hir::LangItem,
     ) -> hir::Expr<'hir> {
-        self.expr(span, hir::ExprKind::Path(hir::QPath::LangItem(lang_item, self.lower_span(span))))
+        let path = self.lang_item_path(span, lang_item);
+        self.expr(span, hir::ExprKind::Path(path))
+    }
+
+    pub(super) fn lang_item_path(
+        &mut self,
+        span: Span,
+        lang_item: hir::LangItem,
+    ) -> hir::QPath<'hir> {
+        hir::QPath::LangItem(lang_item, self.lower_span(span))
     }
 
     /// `<LangItem>::name`

@@ -1285,11 +1285,12 @@ impl<'hir> LoweringContext<'_, 'hir> {
                                 contract_decls.into_iter().map(|d| *d).chain([precond].into_iter()),
                             );
 
-                            let postcond_checker = this.expr_call_lang_item_fn(
-                                ens_span,
-                                rustc_hir::lang_items::LangItem::OptionSome,
-                                &*arena_vec![this; *postcond_checker],
-                            );
+                            let postcond_checker =
+                                this.arena.alloc(this.expr_enum_variant_lang_item(
+                                    ens_span,
+                                    rustc_hir::lang_items::LangItem::OptionSome,
+                                    &*arena_vec![this; *postcond_checker],
+                                ));
                             let then_block_stmts =
                                 this.block_all(req_span, stmts, Some(postcond_checker));
                             let then_block = this.arena.alloc(this.expr_block(&then_block_stmts));
