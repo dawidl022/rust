@@ -1,5 +1,5 @@
 warning: the feature `contracts` is incomplete and may not be safe to use and/or cause compiler crashes
-  --> $DIR/side-effect-ensures.rs:2:12
+  --> $DIR/contracts-disabled-side-effect-ensures.rs:2:12
    |
 LL | #![feature(contracts)]
    |            ^^^^^^^^^

@@ -2539,8 +2539,8 @@ pub const unsafe fn const_deallocate(_ptr: *mut u8, _size: usize, _align: usize)
 /// of not prematurely committing at compile-time to whether contract
 /// checking is turned on, so that we can specify contracts in libstd
 /// and let an end user opt into turning them on.
-#[rustc_const_unstable(feature = "contracts_internals", issue = "128044" /* compiler-team#759 */)]
 #[unstable(feature = "contracts_internals", issue = "128044" /* compiler-team#759 */)]
+#[rustc_const_unstable(feature = "contracts", issue = "128044")]
 #[inline(always)]
 #[lang = "contract_checks"]
 #[rustc_intrinsic]
