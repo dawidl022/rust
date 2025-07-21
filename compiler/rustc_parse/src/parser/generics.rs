@@ -311,15 +311,30 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_contract(
         &mut self,
     ) -> PResult<'a, Option<rustc_ast::ptr::P<ast::FnContract>>> {
-        let (declarations, requires) = if self.eat_keyword_noexpect(exp!(ContractRequires).kw) {
+        let (declarations, requires) = self.parse_contract_requires()?;
+        let ensures = self.parse_contract_ensures()?;
+
+        if requires.is_none() && ensures.is_none() {
+            Ok(None)
+        } else {
+            Ok(Some(rustc_ast::ptr::P(ast::FnContract { declarations, requires, ensures })))
+        }
+    }
+
+    fn parse_contract_requires(
+        &mut self,
+    ) -> PResult<'a, (ThinVec<rustc_ast::Stmt>, Option<Box<rustc_ast::Expr>>)> {
+        Ok(if self.eat_keyword_noexpect(exp!(ContractRequires).kw) {
             self.psess.gated_spans.gate(sym::contracts_internals, self.prev_token.span);
             let mut decls_and_precond = self.parse_block()?;
-            // FIXME handle error properly
-            let precond = decls_and_precond.stmts.pop().unwrap();
-            let mut precond = match precond.kind {
-                rustc_ast::StmtKind::Expr(expr) => expr,
-                rustc_ast::StmtKind::Semi(expr) => expr,
-                _ => panic!("handle error later"),
+
+            let mut precond = match decls_and_precond.stmts.pop() {
+                Some(precond) => match precond.kind {
+                    rustc_ast::StmtKind::Expr(expr) => expr,
+                    _ => dummy_unit_expr(decls_and_precond.span),
+                },
+                // Insert dummy node that will be rejected by typechecker to avoid reinventing error
+                None => dummy_unit_expr(decls_and_precond.span),
             };
             precond.kind = ast::ExprKind::Closure(Box::new(ast::Closure {
                 binder: rustc_ast::ClosureBinder::NotPresent,
@@ -329,30 +344,27 @@ impl<'a> Parser<'a> {
                 coroutine_kind: None,
                 fn_decl: Box::new(rustc_ast::FnDecl {
                     inputs: Default::default(),
-                    // FIXME is span arg correct?
-                    output: rustc_ast::FnRetTy::Default(precond.span.shrink_to_hi()),
+                    output: rustc_ast::FnRetTy::Default(precond.span),
                 }),
-                fn_arg_span: precond.span.shrink_to_hi(),
-                fn_decl_span: precond.span.shrink_to_hi(),
+                fn_arg_span: precond.span,
+                fn_decl_span: precond.span,
                 body: precond.clone(),
             }));
             let decls = decls_and_precond.stmts;
             (decls, Some(precond))
         } else {
             (Default::default(), None)
-        };
-        let ensures = if self.eat_keyword_noexpect(exp!(ContractEnsures).kw) {
+        })
+    }
+
+    fn parse_contract_ensures(&mut self) -> PResult<'a, Option<Box<rustc_ast::Expr>>> {
+        Ok(if self.eat_keyword_noexpect(exp!(ContractEnsures).kw) {
             self.psess.gated_spans.gate(sym::contracts_internals, self.prev_token.span);
             let postcond = self.parse_expr()?;
             Some(postcond)
         } else {
             None
-        };
-        if requires.is_none() && ensures.is_none() {
-            Ok(None)
-        } else {
-            Ok(Some(rustc_ast::ptr::P(ast::FnContract { declarations, requires, ensures })))
-        }
+        })
     }
 
     /// Parses an optional where-clause.
@@ -598,4 +610,14 @@ impl<'a> Parser<'a> {
                     })
                 || self.is_keyword_ahead(start + 1, &[kw::Const]))
     }
+}
+
+fn dummy_unit_expr(span: Span) -> Box<rustc_ast::Expr> {
+    Box::new(rustc_ast::Expr {
+        id: rustc_ast::DUMMY_NODE_ID,
+        kind: rustc_ast::ExprKind::Tup(Default::default()),
+        span,
+        attrs: Default::default(),
+        tokens: Default::default(),
+    })
 }
