@@ -5,7 +5,7 @@
 extern crate core;
 
 // we check here if the "lowered" program behaves as expected before
-// implementing the actual lowering
+// implementing the actual lowering in the compiler
 
 fn foo(x: u32) -> u32 {
     let post = if core::intrinsics::contract_checks() {
