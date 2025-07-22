@@ -7,7 +7,7 @@ extern crate core;
 use core::contracts::{ensures, requires};
 
 // checks that variable declarations are lowered properly, with the ability to
-// access function parameters *both* in requires and ensures
+// refer to them *both* in requires and ensures
 #[requires(let y = 2 * x; y > 0)]
 #[ensures(move |ret| { *ret == y })]
 fn foo(x: u32) -> u32 {
