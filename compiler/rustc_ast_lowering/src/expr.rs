@@ -2188,7 +2188,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         let fields = self.arena.alloc_from_iter(fields.into_iter().enumerate().map(|(i, f)| {
             hir::ExprField {
                 hir_id: self.next_id(),
-                ident: Ident::with_dummy_span(Symbol::intern(&i.to_string())),
+                ident: Ident::from_str(&i.to_string()),
                 expr: f,
                 span: f.span,
                 is_shorthand: false,

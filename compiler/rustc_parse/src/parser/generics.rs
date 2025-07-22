@@ -328,28 +328,16 @@ impl<'a> Parser<'a> {
             self.psess.gated_spans.gate(sym::contracts_internals, self.prev_token.span);
             let mut decls_and_precond = self.parse_block()?;
 
-            let mut precond = match decls_and_precond.stmts.pop() {
+            let precond = match decls_and_precond.stmts.pop() {
                 Some(precond) => match precond.kind {
                     rustc_ast::StmtKind::Expr(expr) => expr,
-                    _ => dummy_unit_expr(decls_and_precond.span),
+                    // Insert dummy node that will be rejected by typechecker to
+                    // avoid reinventing an error
+                    _ => self.mk_unit_expr(decls_and_precond.span),
                 },
-                // Insert dummy node that will be rejected by typechecker to avoid reinventing error
-                None => dummy_unit_expr(decls_and_precond.span),
+                None => self.mk_unit_expr(decls_and_precond.span),
             };
-            precond.kind = ast::ExprKind::Closure(Box::new(ast::Closure {
-                binder: rustc_ast::ClosureBinder::NotPresent,
-                constness: rustc_ast::Const::No,
-                movability: rustc_ast::Movability::Movable,
-                capture_clause: rustc_ast::CaptureBy::Ref,
-                coroutine_kind: None,
-                fn_decl: Box::new(rustc_ast::FnDecl {
-                    inputs: Default::default(),
-                    output: rustc_ast::FnRetTy::Default(precond.span),
-                }),
-                fn_arg_span: precond.span,
-                fn_decl_span: precond.span,
-                body: precond.clone(),
-            }));
+            let precond = self.mk_closure_expr(precond.span, precond);
             let decls = decls_and_precond.stmts;
             (decls, Some(precond))
         } else {
@@ -610,14 +598,4 @@ impl<'a> Parser<'a> {
                     })
                 || self.is_keyword_ahead(start + 1, &[kw::Const]))
     }
-}
-
-fn dummy_unit_expr(span: Span) -> Box<rustc_ast::Expr> {
-    Box::new(rustc_ast::Expr {
-        id: rustc_ast::DUMMY_NODE_ID,
-        kind: rustc_ast::ExprKind::Tup(Default::default()),
-        span,
-        attrs: Default::default(),
-        tokens: Default::default(),
-    })
 }
