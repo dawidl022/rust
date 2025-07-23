@@ -380,36 +380,6 @@ impl<'hir> LoweringContext<'_, 'hir> {
         })
     }
 
-    /// Create an `ExprKind::Ret` that is optionally wrapped by a call to check
-    /// a contract ensures clause, if it exists.
-    fn checked_return(&mut self, opt_expr: Option<&'hir hir::Expr<'hir>>) -> hir::ExprKind<'hir> {
-        let checked_ret =
-            if let Some((check_span, check_ident, check_hir_id)) = self.contract_ensures {
-                let expr = opt_expr.unwrap_or_else(|| self.expr_unit(check_span));
-                Some(self.inject_ensures_check(expr, check_span, check_ident, check_hir_id))
-            } else {
-                opt_expr
-            };
-        hir::ExprKind::Ret(checked_ret)
-    }
-
-    /// Wraps an expression with a call to the ensures check before it gets returned.
-    pub(crate) fn inject_ensures_check(
-        &mut self,
-        expr: &'hir hir::Expr<'hir>,
-        span: Span,
-        cond_ident: Ident,
-        cond_hir_id: HirId,
-    ) -> &'hir hir::Expr<'hir> {
-        let cond_fn = self.expr_ident(span, cond_ident, cond_hir_id);
-        let call_expr = self.expr_call_lang_item_fn_mut(
-            span,
-            hir::LangItem::ContractCheckEnsures,
-            arena_vec![self; *cond_fn, *expr],
-        );
-        self.arena.alloc(call_expr)
-    }
-
     pub(crate) fn lower_const_block(&mut self, c: &AnonConst) -> hir::ConstBlock {
         self.with_new_scopes(c.value.span, |this| {
             let def_id = this.local_def_id(c.id);
@@ -2132,7 +2102,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
         self.expr(span, hir::ExprKind::AddrOf(hir::BorrowKind::Ref, hir::Mutability::Mut, e))
     }
 
-    fn expr_unit(&mut self, sp: Span) -> &'hir hir::Expr<'hir> {
+    pub(super) fn expr_unit(&mut self, sp: Span) -> &'hir hir::Expr<'hir> {
         self.arena.alloc(self.expr(sp, hir::ExprKind::Tup(&[])))
     }
 
