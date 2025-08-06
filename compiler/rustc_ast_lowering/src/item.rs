@@ -1228,7 +1228,9 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 this.arena.alloc_from_iter(decl.inputs.iter().map(|x| this.lower_param(x)));
 
             // Optionally lower the fn contract
-            if let Some(contract) = contract {
+            if let Some(contract) = contract
+                && this.tcx.sess.opts.unstable_opts.contract_checks == Some(true)
+            {
                 (params, this.lower_contract(body, contract))
             } else {
                 (params, body(this))
