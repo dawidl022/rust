@@ -1188,7 +1188,9 @@ impl<'hir> LoweringContext<'_, 'hir> {
             // into:
             //
             // { contract_requires(PRECOND); let __postcond = |ret_val| POSTCOND; postcond({ body }) }
-            if let Some(contract) = contract {
+            if let Some(contract) = contract
+                && this.tcx.sess.opts.unstable_opts.contract_checks == Some(true)
+            {
                 let precond = if let Some(req) = &contract.requires {
                     // Lower the precondition check intrinsic.
                     let lowered_req = this.lower_expr_mut(&req);
