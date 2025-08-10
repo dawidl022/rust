@@ -17,7 +17,7 @@ impl AttrProcMacro for ExpandRequires {
         annotation: TokenStream,
         annotated: TokenStream,
     ) -> Result<TokenStream, ErrorGuaranteed> {
-        if ecx.sess.opts.unstable_opts.contract_checks == Some(true) {
+        if ecx.sess.contract_checks() {
             expand_requires_tts(ecx, span, annotation, annotated)
         } else {
             Ok(annotated)
@@ -33,7 +33,7 @@ impl AttrProcMacro for ExpandEnsures {
         annotation: TokenStream,
         annotated: TokenStream,
     ) -> Result<TokenStream, ErrorGuaranteed> {
-        if ecx.sess.opts.unstable_opts.contract_checks == Some(true) {
+        if ecx.sess.contract_checks() {
             expand_ensures_tts(ecx, span, annotation, annotated)
         } else {
             Ok(annotated)
