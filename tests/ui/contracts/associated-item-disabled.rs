@@ -1,7 +1,6 @@
 // Ensure we don't ICE when lowering contracts on an associated item.
 
 //@ compile-flags: --crate-type=lib
-//@ compile-flags: -Zcontract-checks=yes
 //@ check-pass
 
 #![feature(contracts)]

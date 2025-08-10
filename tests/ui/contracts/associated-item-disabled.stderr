@@ -1,5 +1,5 @@
 warning: the feature `contracts` is incomplete and may not be safe to use and/or cause compiler crashes
-  --> $DIR/associated-item.rs:7:12
+  --> $DIR/associated-item-disabled.rs:6:12
    |
 LL | #![feature(contracts)]
    |            ^^^^^^^^^
