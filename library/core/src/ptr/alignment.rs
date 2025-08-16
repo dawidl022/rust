@@ -83,6 +83,7 @@ impl Alignment {
     #[inline]
     #[track_caller]
     #[rustc_allow_const_fn_unstable(contracts)]
+    #[allow(unused_parens)]
     #[core::contracts::requires(align.is_power_of_two())]
     #[core::contracts::ensures(
             move
@@ -144,6 +145,7 @@ impl Alignment {
     #[unstable(feature = "ptr_alignment_type", issue = "102070")]
     #[inline]
     #[rustc_allow_const_fn_unstable(contracts)]
+    #[allow(unused_parens)]
     #[core::contracts::requires(self.as_usize().is_power_of_two())]
     #[core::contracts::ensures(
             move
