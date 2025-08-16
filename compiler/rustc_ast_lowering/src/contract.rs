@@ -129,11 +129,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         let then_block = self.arena.alloc(self.expr_block(&then_block_stmts));
 
         let precond_check = rustc_hir::ExprKind::If(
-            self.expr_call_lang_item_fn(
-                precond.span,
-                rustc_hir::LangItem::ContractChecks,
-                Default::default(),
-            ),
+            self.arena.alloc(self.expr_bool_literal(precond.span, self.tcx.sess.contract_checks())),
             then_block,
             None,
         );
