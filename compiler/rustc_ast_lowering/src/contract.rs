@@ -170,11 +170,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         let else_block = self.arena.alloc(self.expr_block(else_block));
 
         let contract_check = rustc_hir::ExprKind::If(
-            self.expr_call_lang_item_fn(
-                span,
-                rustc_hir::LangItem::ContractChecks,
-                Default::default(),
-            ),
+            self.arena.alloc(self.expr_bool_literal(span, self.tcx.sess.contract_checks())),
             then_block,
             Some(else_block),
         );
