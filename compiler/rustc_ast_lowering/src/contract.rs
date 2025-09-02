@@ -1,3 +1,5 @@
+use thin_vec::thin_vec;
+
 use crate::LoweringContext;
 
 impl<'a, 'hir> LoweringContext<'a, 'hir> {
@@ -302,7 +304,9 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             ),
         ));
 
-        // let ret_block = self.block_all(span, arena_vec![self; ret_stmt], Some(contract_check));
+        let attrs: rustc_ast::AttrVec = thin_vec![self.unreachable_code_attr(span)];
+        self.lower_attrs(contract_check.hir_id, &attrs, span);
+
         let ret_block = self.block_all(span, arena_vec![self; ret_stmt], Some(contract_check));
         self.arena.alloc(self.expr_block(self.arena.alloc(ret_block)))
     }

@@ -1916,16 +1916,7 @@ impl<'hir> LoweringContext<'_, 'hir> {
             )
         };
 
-        // `#[allow(unreachable_code)]`
-        let attr = attr::mk_attr_nested_word(
-            &self.tcx.sess.psess.attr_id_generator,
-            AttrStyle::Outer,
-            Safety::Default,
-            sym::allow,
-            sym::unreachable_code,
-            try_span,
-        );
-        let attrs: AttrVec = thin_vec![attr];
+        let attrs: AttrVec = thin_vec![self.unreachable_code_attr(try_span)];
 
         // `ControlFlow::Continue(val) => #[allow(unreachable_code)] val,`
         let continue_arm = {
@@ -2311,6 +2302,19 @@ impl<'hir> LoweringContext<'_, 'hir> {
             span: self.lower_span(expr.span),
             body: expr,
         }
+    }
+
+    /// `#[allow(unreachable_code)]`
+    pub(super) fn unreachable_code_attr(&mut self, span: Span) -> Attribute {
+        let attr = attr::mk_attr_nested_word(
+            &self.tcx.sess.psess.attr_id_generator,
+            AttrStyle::Outer,
+            Safety::Default,
+            sym::allow,
+            sym::unreachable_code,
+            span,
+        );
+        attr
     }
 }
 
