@@ -14,14 +14,20 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 //
                 // into:
                 //
+                // let __postcond = if cfg!(contract_checks) {
+                //     contract_check_requires(PRECOND);
+                //     Some(|ret_val| POSTCOND)
+                // } else {
+                //     None
+                // };
                 // {
-                //      let __postcond = if contracts_checks() {
-                //          contract_check_requires(PRECOND);
-                //          Some(|ret_val| POSTCOND)
-                //      } else {
-                //          None
-                //      };
-                //      contract_check_ensures(__postcond, { body })
+                //     let ret = { body };
+                //
+                //     if cfg!(contract_checks) {
+                //         contract_check_ensures(__postcond, ret)
+                //     } else {
+                //         ret
+                //     }
                 // }
 
                 let precond = self.lower_precond(req);
@@ -241,12 +247,63 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         cond_ident: rustc_span::Ident,
         cond_hir_id: rustc_hir::HirId,
     ) -> &'hir rustc_hir::Expr<'hir> {
+        // {
+        //     let ret = { body };
+        //
+        //     if cfg!(contract_checks) {
+        //         contract_check_ensures(__postcond, ret)
+        //     } else {
+        //         ret
+        //     }
+        // }
+        let ret_ident: rustc_span::Ident = rustc_span::Ident::from_str_and_span("__ret", span);
+
+        // Set up the return `let` statement.
+        let (ret_pat, ret_hir_id) =
+            self.pat_ident_binding_mode_mut(span, ret_ident, rustc_hir::BindingMode::NONE);
+
+        let ret_stmt = self.stmt_let_pat(
+            None,
+            span,
+            Some(expr),
+            self.arena.alloc(ret_pat),
+            rustc_hir::LocalSource::Contract,
+        );
+
+        let ret = self.expr_ident(span, ret_ident, ret_hir_id);
+        // Maybe same ident can't be used in 2 places??
+        let ret_2 = self.expr_ident(span, ret_ident, ret_hir_id);
+
         let cond_fn = self.expr_ident(span, cond_ident, cond_hir_id);
-        let call_expr = self.expr_call_lang_item_fn_mut(
+        let contract_check = self.expr_call_lang_item_fn_mut(
             span,
             rustc_hir::LangItem::ContractCheckEnsures,
-            arena_vec![self; *cond_fn, *expr],
+            arena_vec![self; *cond_fn, *ret],
         );
-        self.arena.alloc(call_expr)
+        let contract_check = self.arena.alloc(contract_check);
+
+        // TODO abstract away this block creation madness
+        let call_expr = self.block_expr(contract_check);
+        let call_expr = self.expr_block(call_expr);
+        let call_expr = self.arena.alloc(call_expr);
+
+        let ret_block = self.block_expr(ret_2);
+        let ret_block = self.expr_block(ret_block);
+        let ret_block = self.arena.alloc(ret_block);
+
+        let contracts_enabled: rustc_hir::Expr<'_> =
+            self.expr_bool_literal(span, self.tcx.sess.contract_checks());
+        let contract_check = self.arena.alloc(self.expr(
+            span,
+            rustc_hir::ExprKind::If(
+                self.arena.alloc(contracts_enabled),
+                call_expr,
+                Some(ret_block),
+            ),
+        ));
+
+        // let ret_block = self.block_all(span, arena_vec![self; ret_stmt], Some(contract_check));
+        let ret_block = self.block_all(span, arena_vec![self; ret_stmt], Some(contract_check));
+        self.arena.alloc(self.expr_block(self.arena.alloc(ret_block)))
     }
 }
