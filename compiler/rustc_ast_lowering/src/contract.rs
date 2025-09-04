@@ -16,7 +16,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 //
                 // into:
                 //
-                // let __postcond = if cfg!(contract_checks) {
+                // let __postcond = if contract_checks {
                 //     contract_check_requires(PRECOND);
                 //     Some(|ret_val| POSTCOND)
                 // } else {
@@ -25,7 +25,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 // {
                 //     let ret = { body };
                 //
-                //     if cfg!(contract_checks) {
+                //     if contract_checks {
                 //         contract_check_ensures(__postcond, ret)
                 //     } else {
                 //         ret
@@ -49,13 +49,19 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 //
                 // into:
                 //
+                // let __postcond = if contract_checks {
+                //     Some(|ret_val| POSTCOND)
+                // } else {
+                //     None
+                // };
                 // {
-                //      let __postcond = if contracts_check() {
-                //          Some(|ret_val| POSTCOND)
-                //      } else {
-                //          None
-                //      };
-                //      __postcond({ body })
+                //     let ret = { body };
+                //
+                //     if contract_checks {
+                //         contract_check_ensures(__postcond, ret)
+                //     } else {
+                //         ret
+                //     }
                 // }
 
                 let postcond_checker = self.lower_postcond_checker(ens);
@@ -74,7 +80,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 // into:
                 //
                 // {
-                //      if contracts_check() {
+                //      if contracts_checks {
                 //          contract_requires(PRECOND);
                 //      }
                 //      body
@@ -252,7 +258,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         // {
         //     let ret = { body };
         //
-        //     if cfg!(contract_checks) {
+        //     if contract_checks {
         //         contract_check_ensures(__postcond, ret)
         //     } else {
         //         ret
@@ -283,7 +289,8 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         let contract_check = self.arena.alloc(contract_check);
         let call_expr = self.block_expr_block(contract_check);
 
-        // same ident can't be used in 2 places
+        // same ident can't be used in 2 places, so we create a new one for the
+        // else branch
         let ret = self.expr_ident(span, ret_ident, ret_hir_id);
         let ret_block = self.block_expr_block(ret);
 
