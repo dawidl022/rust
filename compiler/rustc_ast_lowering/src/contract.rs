@@ -273,8 +273,6 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         );
 
         let ret = self.expr_ident(span, ret_ident, ret_hir_id);
-        // Maybe same ident can't be used in 2 places??
-        let ret_2 = self.expr_ident(span, ret_ident, ret_hir_id);
 
         let cond_fn = self.expr_ident(span, cond_ident, cond_hir_id);
         let contract_check = self.expr_call_lang_item_fn_mut(
@@ -283,15 +281,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             arena_vec![self; *cond_fn, *ret],
         );
         let contract_check = self.arena.alloc(contract_check);
+        let call_expr = self.block_expr_block(contract_check);
 
-        // TODO abstract away this block creation madness
-        let call_expr = self.block_expr(contract_check);
-        let call_expr = self.expr_block(call_expr);
-        let call_expr = self.arena.alloc(call_expr);
-
-        let ret_block = self.block_expr(ret_2);
-        let ret_block = self.expr_block(ret_block);
-        let ret_block = self.arena.alloc(ret_block);
+        // same ident can't be used in 2 places
+        let ret = self.expr_ident(span, ret_ident, ret_hir_id);
+        let ret_block = self.block_expr_block(ret);
 
         let contracts_enabled: rustc_hir::Expr<'_> =
             self.expr_bool_literal(span, self.tcx.sess.contract_checks());

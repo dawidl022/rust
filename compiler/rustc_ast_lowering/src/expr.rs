@@ -2253,6 +2253,17 @@ impl<'hir> LoweringContext<'_, 'hir> {
         self.expr(b.span, hir::ExprKind::Block(b, None))
     }
 
+    /// Wrap an expression in a block, and wrap that block in an expression again.
+    /// Useful for constructing if-expressions, which require expressions of
+    /// kind block.
+    pub(super) fn block_expr_block(
+        &mut self,
+        expr: &'hir hir::Expr<'hir>,
+    ) -> &'hir hir::Expr<'hir> {
+        let b = self.block_expr(expr);
+        self.arena.alloc(self.expr_block(b))
+    }
+
     pub(super) fn expr_array_ref(
         &mut self,
         span: Span,
