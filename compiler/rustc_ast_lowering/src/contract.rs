@@ -3,6 +3,16 @@ use thin_vec::thin_vec;
 use crate::LoweringContext;
 
 impl<'a, 'hir> LoweringContext<'a, 'hir> {
+    /// Lowered contracts are guarded with the `contract_checks` compiler flag,
+    /// i.e. the flag turns into a boolean guard in the lowered HIR. The reason
+    /// for not eliminating the contract code entirely when the `contract_checks`
+    /// flag is disabled is so that contracts can be type checked, even when
+    /// they are disabled, which avoids them becoming stale (i.e. out of sync
+    /// with the codebase) over time.
+    ///
+    /// The optimiser should be able to eliminate all contract code guarded
+    /// by `if false`, leaving the original body intact when runtime contract
+    /// checks are disabled.
     pub(super) fn lower_contract(
         &mut self,
         body: impl FnOnce(&mut Self) -> rustc_hir::Expr<'hir>,
