@@ -11,7 +11,7 @@ use crate::mem::ManuallyDrop;
 /// the contract. Since contracts should not affect the behaviour of the
 /// function, we wrap the returned value in a [`ManuallyDrop`] for the caller's
 /// convenience.
-pub const fn owned<T>(ptr: *const T) -> ManuallyDrop<T> {
+pub const fn owned<T>(ptr: *const ()) -> ManuallyDrop<T> {
     let _ = ptr;
     unimplemented!()
 }
