@@ -1,6 +1,7 @@
 //! Unstable module containing the unstable contracts lang items and attribute macros.
 
 pub use crate::macros::builtin::{contracts_ensures as ensures, contracts_requires as requires};
+pub mod ownership;
 
 /// This is an identity function used as part of the desugaring of the `#[ensures]` attribute.
 ///
