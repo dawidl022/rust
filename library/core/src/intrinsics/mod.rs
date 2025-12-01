@@ -2579,16 +2579,13 @@ pub const fn is_val_statically_known<T: Copy>(_arg: T) -> bool {
 #[rustc_intrinsic_const_stable_indirect]
 #[rustc_allow_const_fn_unstable(contracts)]
 #[core::contracts::requires(
-    core::contracts::ownership::owned::<T>(x as *const _);
-    core::contracts::ownership::owned::<T>(y as *const _);
+    core::contracts::ownership::owned(x);
+    core::contracts::ownership::owned(y);
     true
 )]
-#[core::contracts::ensures(
-    let x_ptr = x as *const ();
-    let y_ptr = y as *const ();
-    move |_| {
-    core::contracts::ownership::owned::<T>(x_ptr);
-    core::contracts::ownership::owned::<T>(y_ptr);
+#[core::contracts::ensures(move |_| {
+    core::contracts::ownership::owned(x);
+    core::contracts::ownership::owned(y);
     true
 })]
 pub const unsafe fn typed_swap_nonoverlapping<T>(x: *mut T, y: *mut T) {
