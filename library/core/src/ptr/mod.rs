@@ -617,9 +617,27 @@ pub const unsafe fn copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: us
 #[doc(alias = "memmove")]
 #[stable(feature = "rust1", since = "1.0.0")]
 #[rustc_const_stable(feature = "const_intrinsic_copy", since = "1.83.0")]
+#[rustc_allow_const_fn_unstable(contracts)]
 #[inline(always)]
 #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
 #[rustc_diagnostic_item = "ptr_copy"]
+// TODO double check this contract is correct, e.g. are we sure we can ensure we
+// own Ts at the end, if we don't know if `src` points to valid Ts?
+#[core::contracts::requires(
+    for i in 0..count {
+        core::contracts::ownership::owned::<MaybeUninit<T>>(dst.wrapping_add(i));
+    }
+    true
+)]
+#[core::contracts::ensures(
+    let dst_ptr = dst as *const u8;
+    move |_| {
+    for i in 0..count {
+        core::contracts::ownership::owned::<T>(dst_ptr.wrapping_add(i * size_of::<T>()) as *const _);
+    }
+    true
+}
+)]
 pub const unsafe fn copy<T>(src: *const T, dst: *mut T, count: usize) {
     // SAFETY: the safety contract for `copy` must be upheld by the caller.
     unsafe {
