@@ -625,7 +625,7 @@ pub const unsafe fn copy_nonoverlapping<T>(src: *const T, dst: *mut T, count: us
 // own Ts at the end, if we don't know if `src` points to valid Ts?
 #[core::contracts::requires(
     for i in 0..count {
-        core::contracts::ownership::owned::<MaybeUninit<T>>(dst.wrapping_add(i));
+        core::contracts::ownership::owned::<MaybeUninit<T>>(dst.wrapping_add(i) as *const _);
     }
     true
 )]
