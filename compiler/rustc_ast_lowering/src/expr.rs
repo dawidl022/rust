@@ -2341,6 +2341,60 @@ impl<'hir> LoweringContext<'_, 'hir> {
         self.expr(span, hir::ExprKind::Lit(Spanned { node: LitKind::Bool(val), span }))
     }
 
+    pub(super) fn expr_closure(
+        &mut self,
+        span: Span,
+        body_expr: hir::Expr<'hir>,
+    ) -> hir::Expr<'hir> {
+        // 1. Generate a NodeId for the closure itself.
+        let closure_node_id = self.next_node_id();
+
+        // 2. Register the definition. 'create_def' is usually handled by the Resolver,
+        // but if you are forced to do it here, you MUST map the NodeId to a HirId.
+        let closure_def_id = self.create_def(
+            closure_node_id,
+            None,
+            hir::def::DefKind::Closure,
+            hir::definitions::DefPathData::LateClosure,
+            span,
+        );
+
+        let hir_id = self.lower_node_id(closure_node_id);
+
+        // 3. Lower the body. This is the "magic" part.
+        // 'lower_body' handles registering the BodyId and the 'bodies' map.
+        let body_id = self.lower_body(|_| {
+            // We return any arguments (none here) and the expression itself.
+            (Default::default(), body_expr)
+        });
+
+        // 4. Construct the FnDecl (Closure signature)
+        let fn_decl = self.arena.alloc(hir::FnDecl {
+            inputs: &[],
+            output: hir::FnRetTy::DefaultReturn(span),
+            c_variadic: false,
+            implicit_self: hir::ImplicitSelfKind::None,
+            lifetime_elision_allowed: true,
+        });
+
+        // 5. Build the Closure metadata
+        let closure = self.arena.alloc(hir::Closure {
+            def_id: closure_def_id,
+            binder: hir::ClosureBinder::Default,
+            constness: hir::Constness::NotConst,
+            capture_clause: hir::CaptureBy::Ref,
+            bound_generic_params: &[],
+            fn_decl,
+            body: body_id,
+            fn_decl_span: span,
+            fn_arg_span: None,
+            kind: hir::ClosureKind::Closure,
+        });
+
+        // 6. Return the final Expression
+        hir::Expr { hir_id, kind: hir::ExprKind::Closure(closure), span }
+    }
+
     pub(super) fn expr(&mut self, span: Span, kind: hir::ExprKind<'hir>) -> hir::Expr<'hir> {
         let hir_id = self.next_id();
         hir::Expr { hir_id, kind, span: self.lower_span(span) }

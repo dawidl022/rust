@@ -205,6 +205,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             Some(precond) => precond.span,
             None => postcond_checker.span,
         };
+        let span = self.mark_span_with_reason(
+            rustc_span::DesugaringKind::Contract,
+            span,
+            Some(Arc::clone(&self.allow_contracts)),
+        );
 
         let postcond_checker = self.arena.alloc(self.expr_enum_variant_lang_item(
             postcond_checker.span,
@@ -212,7 +217,17 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             &*arena_vec![self; *postcond_checker],
         ));
         let then_block_stmts = self.block_all(span, stmts, Some(postcond_checker));
-        let then_block = self.arena.alloc(self.expr_block(&then_block_stmts));
+
+        let then_block_stmts = self.expr_block(then_block_stmts);
+        let then_block_closure = self.expr_closure(span, then_block_stmts);
+
+        let build_postcond_call = self.expr_call_lang_item_fn(
+            span,
+            rustc_hir::LangItem::ContractCheckRequiresAndBuildEnsures,
+            &*arena_vec![self; then_block_closure],
+        );
+        let then_block_stmts = self.block_all(span, Default::default(), Some(build_postcond_call));
+        let then_block = self.arena.alloc(self.expr_block(then_block_stmts));
 
         let none_expr = self.arena.alloc(self.expr_enum_variant_lang_item(
             postcond_checker.span,
