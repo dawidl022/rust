@@ -2739,14 +2739,14 @@ pub const fn contract_check_ensures<C: Fn(&Ret) -> bool + Copy, Ret>(
 #[lang = "contract_check_requires_and_build_ensures"]
 pub const fn contract_check_requires_and_build_ensures<
     // TODO make E a non-optional type, so that we can early return a non-option
-    C: Fn() -> Option<E> + Copy,
+    C: FnOnce() -> Option<E> + Copy,
     E: Fn(&Ret) -> bool + Copy,
     Ret,
 >(
     contract: C,
 ) -> Option<E> {
     const_eval_select!(
-        @capture[C: Fn() -> Option<E> + Copy, E: Fn(&Ret) -> bool + Copy, Ret] { contract: C } -> Option<E>:
+        @capture[C: FnOnce() -> Option<E> + Copy, E: Fn(&Ret) -> bool + Copy, Ret] { contract: C } -> Option<E>:
         if const {
             None
         } else {
