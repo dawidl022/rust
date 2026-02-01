@@ -27,6 +27,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
         match (&contract.requires, &contract.ensures) {
             (Some(req), Some(ens)) => {
+                // TODO update these comments to make it explicit where the closure is inserted
                 // Lower the fn contract, which turns:
                 //
                 // { body }
@@ -126,28 +127,6 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         }
     }
 
-    fn block_decls_with_precond(
-        &mut self,
-        contract_decls: &'hir [rustc_hir::Stmt<'_>],
-        lowered_req: &'hir rustc_hir::Expr<'_>,
-    ) -> rustc_hir::Stmt<'hir> {
-        let req_span = Self::span_of_stmts(contract_decls, lowered_req.span);
-
-        let precond_stmts = self.block_all(req_span, contract_decls, Some(lowered_req));
-        let precond_stmts = self.expr_block(precond_stmts);
-        self.lower_precond(precond_stmts)
-    }
-
-    fn span_of_stmts(
-        stmts: &'hir [rustc_hir::Stmt<'_>],
-        default_span: rustc_span::Span,
-    ) -> rustc_span::Span {
-        match stmts {
-            [] => default_span,
-            [first, ..] => first.span.to(default_span),
-        }
-    }
-
     fn lower_decls(&mut self, contract: &rustc_ast::FnContract) -> &'hir [rustc_hir::Stmt<'hir>] {
         let (decls, decls_tail) = self.lower_stmts(&contract.declarations);
 
@@ -198,6 +177,18 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     // TODO abstract out/clean up
     // code after opening draft PR to share new lowering approach with others
 
+    fn block_decls_with_precond(
+        &mut self,
+        contract_decls: &'hir [rustc_hir::Stmt<'_>],
+        lowered_req: &'hir rustc_hir::Expr<'_>,
+    ) -> rustc_hir::Stmt<'hir> {
+        let req_span = span_of_stmts(contract_decls, lowered_req.span);
+
+        let precond_stmts = self.block_all(req_span, contract_decls, Some(lowered_req));
+        let precond_stmts = self.expr_block(precond_stmts);
+        self.lower_precond(precond_stmts)
+    }
+
     fn lower_contract_check_just_precond(
         &mut self,
         precond: rustc_hir::Stmt<'hir>,
@@ -222,9 +213,6 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         precond: Option<rustc_hir::Stmt<'hir>>,
         postcond_checker: &'hir rustc_hir::Expr<'hir>,
     ) -> &'hir rustc_hir::Expr<'hir> {
-        // TODO park the span stuff for now, it seems difficult to report that
-        // the decls are invalid, when the check is done on the entire closure,
-        // comprising of decls, precond and postcond
         let stmts = self
             .arena
             .alloc_from_iter(contract_decls.into_iter().map(|d| *d).chain(precond.into_iter()));
@@ -234,15 +222,12 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             rustc_hir::lang_items::LangItem::OptionSome,
             &*arena_vec![self; *postcond_checker],
         ));
-        // span is set to decls + precondition, because those will determine
-        // the well-typedness of the __ensures_builder closure.
-        // postcond_checker is already type-checked separately
-        // TODO we need one more layer of closures in __ensures_builder, so
-        // that the above sentence is correct.
-        let span = Self::span_of_stmts(
-            stmts,
-            stmts.last().map(|s| s.span).unwrap_or(postcond_checker.span),
-        );
+        // For error diagnostics, span is set to decls + precondition, because
+        // those will determine the well-typedness of the __ensures_builder
+        // closure. postcond_checker is already type-checked as part of the
+        // call to build_check_ensures.
+        let span =
+            span_of_stmts(stmts, stmts.last().map(|s| s.span).unwrap_or(postcond_checker.span));
         let span = self.mark_span_with_reason(
             rustc_span::DesugaringKind::Contract,
             span,
@@ -414,5 +399,15 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
         let ret_block = self.block_all(span, arena_vec![self; ret_stmt], Some(contract_check));
         self.arena.alloc(self.expr_block(self.arena.alloc(ret_block)))
+    }
+}
+
+fn span_of_stmts<'hir>(
+    stmts: &'hir [rustc_hir::Stmt<'_>],
+    default_span: rustc_span::Span,
+) -> rustc_span::Span {
+    match stmts {
+        [] => default_span,
+        [first, ..] => first.span.to(default_span),
     }
 }
