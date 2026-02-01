@@ -2738,7 +2738,8 @@ pub const fn contract_check_ensures<C: Fn(&Ret) -> bool + Copy, Ret>(
 #[rustc_const_unstable(feature = "contracts", issue = "128044")]
 #[lang = "contract_check_requires_and_build_ensures"]
 pub const fn contract_check_requires_and_build_ensures<
-    // TODO make E a non-optional type, so that we can early return a non-option
+    // TODO make E a non-optional type (i.e. specialise for the precond-only
+    // case), so that we can early return a non-option
     C: FnOnce() -> Option<E> + Copy,
     E: Fn(&Ret) -> bool + Copy,
     Ret,

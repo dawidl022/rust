@@ -2,8 +2,9 @@
 #![feature(contracts)]
 
 extern crate core;
-use core::contracts::ensures;
+use core::contracts::{ensures, requires};
 
+#[requires(true)]
 #[ensures(*x = 0; |_ret| true)]
 //~^ ERROR: the trait bound `&mut &mut u32: std::marker::Copy` is not satisfied
 fn buggy_add(x: &mut u32, y: u32) {

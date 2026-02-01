@@ -107,8 +107,47 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 //      }
                 //      body
                 // }
-                let precond = self.lower_precond(req);
-                let precond_check = self.lower_contract_check_just_precond(contract_decls, precond);
+                let lowered_req = self.arena.alloc(self.lower_expr_mut(&req));
+
+                // TODO make sure this also works when ensures is present
+                // TODO include the entire span from expr_closure to lowered_req
+                // (inclusive), otherwise diagnostic messages are confusing
+                let req_span = Self::span_of_stmts(contract_decls, lowered_req.span);
+                let req_span = self.mark_span_with_reason(
+                    rustc_span::DesugaringKind::Contract,
+                    req_span,
+                    Some(Arc::clone(&self.allow_contracts)),
+                );
+
+                let precond_stmts = self.block_all(req_span, contract_decls, Some(lowered_req));
+                let precond_stmts = self.expr_block(precond_stmts);
+                let precond_closure = self.expr_closure(req_span, precond_stmts);
+
+                // TODO wrap precond_stmts in closure, and remove closure
+                // construction in parser
+
+                // TODO we might also need to use a temporary variable to get
+                // the desirable diagnostic messages
+
+                let precond = self.expr_call_lang_item_fn_mut(
+                    req_span,
+                    rustc_hir::LangItem::ContractCheckRequires,
+                    &*arena_vec![self; precond_closure],
+                );
+                let precond = self.stmt_expr(req_span, precond);
+
+                let then_block_stmts = self.block_all(req_span, &*arena_vec![self; precond], None);
+                let then_block = self.arena.alloc(self.expr_block(&then_block_stmts));
+
+                let precond_check = rustc_hir::ExprKind::If(
+                    self.arena
+                        .alloc(self.expr_bool_literal(req_span, self.tcx.sess.contract_checks())),
+                    then_block,
+                    None,
+                );
+
+                let precond_check = self.expr(req_span, precond_check);
+                let precond_check = self.stmt_expr(req_span, precond_check);
 
                 let body = self.arena.alloc(body(self));
 
@@ -121,6 +160,16 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 self.expr_block(wrapped_body)
             }
             (None, None) => body(self),
+        }
+    }
+
+    fn span_of_stmts(
+        stmts: &'hir [rustc_hir::Stmt<'_>],
+        default_span: rustc_span::Span,
+    ) -> rustc_span::Span {
+        match stmts {
+            [] => default_span,
+            [first, ..] => first.span.to(default_span),
         }
     }
 
@@ -144,10 +193,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             lowered_req.span,
             Some(Arc::clone(&self.allow_contracts)),
         );
+        let req_closure = self.expr_closure(req_span, lowered_req);
         let precond = self.expr_call_lang_item_fn_mut(
             req_span,
             rustc_hir::LangItem::ContractCheckRequires,
-            &*arena_vec![self; lowered_req],
+            &*arena_vec![self; req_closure],
         );
         self.stmt_expr(req.span, precond)
     }
@@ -170,30 +220,8 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         )
     }
 
-    fn lower_contract_check_just_precond(
-        &mut self,
-        contract_decls: &'hir [rustc_hir::Stmt<'hir>],
-        precond: rustc_hir::Stmt<'hir>,
-    ) -> rustc_hir::Stmt<'hir> {
-        let stmts = self
-            .arena
-            .alloc_from_iter(contract_decls.into_iter().map(|d| *d).chain([precond].into_iter()));
-
-        let then_block_stmts = self.block_all(precond.span, stmts, None);
-        let then_block = self.arena.alloc(self.expr_block(&then_block_stmts));
-
-        let precond_check = rustc_hir::ExprKind::If(
-            self.arena.alloc(self.expr_bool_literal(precond.span, self.tcx.sess.contract_checks())),
-            then_block,
-            None,
-        );
-
-        let precond_check = self.expr(precond.span, precond_check);
-        self.stmt_expr(precond.span, precond_check)
-    }
-
-    // TODO abstract out pattern of HIR variable binding
-    // then lower __postcond_builder before calling check_precond_and_build_postcond
+    // TODO abstract out/clean up
+    // code after opening draft PR to share new lowering approach with others
 
     fn lower_contract_check_with_postcond(
         &mut self,
@@ -201,24 +229,31 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         precond: Option<rustc_hir::Stmt<'hir>>,
         postcond_checker: &'hir rustc_hir::Expr<'hir>,
     ) -> &'hir rustc_hir::Expr<'hir> {
+        // TODO park the span stuff for now, it seems difficult to report that
+        // the decls are invalid, when the check is done on the entire closure,
+        // comprising of decls, precond and postcond
         let stmts = self
             .arena
             .alloc_from_iter(contract_decls.into_iter().map(|d| *d).chain(precond.into_iter()));
-        let span = match precond {
-            Some(precond) => precond.span,
-            None => postcond_checker.span,
-        };
-        let span = self.mark_span_with_reason(
-            rustc_span::DesugaringKind::Contract,
-            span,
-            Some(Arc::clone(&self.allow_contracts)),
-        );
 
         let postcond_checker = self.arena.alloc(self.expr_enum_variant_lang_item(
             postcond_checker.span,
             rustc_hir::lang_items::LangItem::OptionSome,
             &*arena_vec![self; *postcond_checker],
         ));
+        // span is set to decls + precondition, because those will determine
+        // the well-typedness of the __ensures_builder closure.
+        // postcond_checker is already type-checked separately
+        let span = Self::span_of_stmts(
+            stmts,
+            stmts.last().map(|s| s.span).unwrap_or(postcond_checker.span),
+        );
+        let span = self.mark_span_with_reason(
+            rustc_span::DesugaringKind::Contract,
+            span,
+            Some(Arc::clone(&self.allow_contracts)),
+        );
+
         let then_block_stmts = self.block_all(span, stmts, Some(postcond_checker));
 
         let then_block_stmts = self.expr_block(then_block_stmts);
@@ -239,7 +274,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         let then_block = self.arena.alloc(self.expr_block(then_block_stmts));
 
         let none_expr = self.arena.alloc(self.expr_enum_variant_lang_item(
-            postcond_checker.span,
+            span,
             rustc_hir::lang_items::LangItem::OptionNone,
             Default::default(),
         ));
