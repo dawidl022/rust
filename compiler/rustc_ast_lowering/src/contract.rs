@@ -213,10 +213,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             Some(Arc::clone(&self.allow_contracts)),
         );
         let lowered_ens = self.lower_expr_mut(&ens);
+        let ens_closure = self.expr_closure(ens_span, lowered_ens);
         self.expr_call_lang_item_fn(
             ens_span,
             rustc_hir::LangItem::ContractBuildCheckEnsures,
-            &*arena_vec![self; lowered_ens],
+            &*arena_vec![self; ens_closure],
         )
     }
 
@@ -244,6 +245,8 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         // span is set to decls + precondition, because those will determine
         // the well-typedness of the __ensures_builder closure.
         // postcond_checker is already type-checked separately
+        // TODO we need one more layer of closures in __ensures_builder, so
+        // that the above sentence is correct.
         let span = Self::span_of_stmts(
             stmts,
             stmts.last().map(|s| s.span).unwrap_or(postcond_checker.span),
