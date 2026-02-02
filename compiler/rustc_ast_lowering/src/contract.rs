@@ -27,7 +27,6 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
         match (&contract.requires, &contract.ensures) {
             (Some(req), Some(ens)) => {
-                // TODO update these comments to make it explicit where the closure is inserted
                 // Lower the fn contract, which turns:
                 //
                 // { body }
@@ -35,9 +34,12 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 // into:
                 //
                 // let __postcond = if contract_checks {
-                //     CONTRACT_DECLARATIONS;
-                //     contract_check_requires(PRECOND);
-                //     Some(|ret_val| POSTCOND)
+                //     let __ensures_builder = || {
+                //         CONTRACT_DECLARATIONS;
+                //         contract_check_requires(|| PRECOND);
+                //         build_check_ensures(Some(|| { POSTCOND_DECLS; |ret_val| POSTCOND }))
+                //     };
+                //     contract_check_requires_and_build_ensures(__ensures_builder)
                 // } else {
                 //     None
                 // };
@@ -73,7 +75,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 // into:
                 //
                 // let __postcond = if contract_checks {
-                //     Some(|ret_val| POSTCOND)
+                //     let __ensures_builder = || {
+                //         CONTRACT_DECLARATIONS;
+                //         build_check_ensures(Some(|| { POSTCOND_DECLS; |ret_val| POSTCOND }))
+                //     };
+                //     contract_check_requires_and_build_ensures(__ensures_builder)
                 // } else {
                 //     None
                 // };
@@ -81,7 +87,6 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 //     let ret = { body };
                 //
                 //     if contract_checks {
-                //         CONTRACT_DECLARATIONS;
                 //         contract_check_ensures(__postcond, ret)
                 //     } else {
                 //         ret
@@ -104,8 +109,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 //
                 // {
                 //      if contracts_checks {
-                //          CONTRACT_DECLARATIONS;
-                //          contract_requires(PRECOND);
+                //          contract_requires(|| { CONTRACT_DECLARATIONS; PRECOND });
                 //      }
                 //      body
                 // }
