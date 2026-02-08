@@ -218,11 +218,6 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             .arena
             .alloc_from_iter(contract_decls.into_iter().map(|d| *d).chain(precond.into_iter()));
 
-        let postcond_checker = self.arena.alloc(self.expr_enum_variant_lang_item(
-            postcond_checker.span,
-            rustc_hir::lang_items::LangItem::OptionSome,
-            &*arena_vec![self; *postcond_checker],
-        ));
         let span = self.contract_check_with_postcond_span(stmts, postcond_checker);
 
         let then_block = self.contract_check_with_postcond_block(stmts, postcond_checker, span);
@@ -239,7 +234,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     fn contract_check_with_postcond_span(
         &mut self,
         stmts: &mut [rustc_hir::Stmt<'hir>],
-        postcond_checker: &mut rustc_hir::Expr<'_>,
+        postcond_checker: &rustc_hir::Expr<'_>,
     ) -> rustc_span::Span {
         // For error diagnostics, span is set to decls + precondition, because
         // those will determine the well-typedness of the __ensures_builder
@@ -257,7 +252,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     fn contract_check_with_postcond_block(
         &mut self,
         stmts: &'hir mut [rustc_hir::Stmt<'hir>],
-        postcond_checker: &'hir mut rustc_hir::Expr<'_>,
+        postcond_checker: &'hir rustc_hir::Expr<'_>,
         span: rustc_span::Span,
     ) -> &'hir mut rustc_hir::Expr<'hir> {
         let (builder_decl, builder_ident_expr) =
@@ -276,7 +271,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     fn contract_check_with_postcond_builder(
         &mut self,
         stmts: &'hir mut [rustc_hir::Stmt<'hir>],
-        postcond_checker: &'hir mut rustc_hir::Expr<'_>,
+        postcond_checker: &'hir rustc_hir::Expr<'_>,
         span: rustc_span::Span,
     ) -> (rustc_hir::Stmt<'hir>, &'hir rustc_hir::Expr<'hir>) {
         let block_closure =
@@ -292,7 +287,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
     fn contract_check_with_postcond_builder_closure(
         &mut self,
         stmts: &'hir mut [rustc_hir::Stmt<'hir>],
-        postcond_checker: &'hir mut rustc_hir::Expr<'_>,
+        postcond_checker: &'hir rustc_hir::Expr<'_>,
         span: rustc_span::Span,
     ) -> &'hir mut rustc_hir::Expr<'hir> {
         let stmts = self.block_all(span, stmts, Some(postcond_checker));
