@@ -305,23 +305,18 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         span: rustc_span::Span,
         var_name: &str,
     ) -> (rustc_span::Ident, rustc_hir::HirId, rustc_hir::Stmt<'hir>) {
-        let check_ident: rustc_span::Ident = rustc_span::Ident::from_str_and_span(var_name, span);
-        let (check_hir_id, postcond_decl) = {
-            // Set up the postcondition `let` statement.
-            let (checker_pat, check_hir_id) =
-                self.pat_ident_binding_mode_mut(span, check_ident, rustc_hir::BindingMode::NONE);
-            (
-                check_hir_id,
-                self.stmt_let_pat(
-                    None,
-                    span,
-                    Some(expr),
-                    self.arena.alloc(checker_pat),
-                    rustc_hir::LocalSource::Contract,
-                ),
-            )
-        };
-        (check_ident, check_hir_id, postcond_decl)
+        let ident = rustc_span::Ident::from_str_and_span(var_name, span);
+        let (pat, hir_id) =
+            self.pat_ident_binding_mode_mut(span, ident, rustc_hir::BindingMode::NONE);
+
+        let decl = self.stmt_let_pat(
+            None,
+            span,
+            Some(expr),
+            self.arena.alloc(pat),
+            rustc_hir::LocalSource::Contract,
+        );
+        (ident, hir_id, decl)
     }
 
     /// Create an `ExprKind::Ret` that is optionally wrapped by a call to check
