@@ -178,9 +178,6 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         )
     }
 
-    // TODO abstract out/clean up
-    // code after opening draft PR to share new lowering approach with others
-
     fn block_decls_with_precond(
         &mut self,
         contract_decls: &'hir [rustc_hir::Stmt<'_>],
@@ -394,20 +391,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         //         ret
         //     }
         // }
-        let ret_ident: rustc_span::Ident = rustc_span::Ident::from_str_and_span("__ret", span);
-
-        // Set up the return `let` statement.
-        let (ret_pat, ret_hir_id) =
-            self.pat_ident_binding_mode_mut(span, ret_ident, rustc_hir::BindingMode::NONE);
-
-        let ret_stmt = self.stmt_let_pat(
-            None,
-            span,
-            Some(expr),
-            self.arena.alloc(ret_pat),
-            rustc_hir::LocalSource::Contract,
-        );
-
+        let (ret_ident, ret_hir_id, ret_stmt) = self.bind_expression(expr, span, "__ret");
         let ret = self.expr_ident(span, ret_ident, ret_hir_id);
 
         let cond_fn = self.expr_ident(span, cond_ident, cond_hir_id);
