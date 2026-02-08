@@ -1,4 +1,4 @@
-error[E0277]: the trait bound `&mut &mut u32: std::marker::Copy` is not satisfied in `{closure@$DIR/contracts-disabled-side-effect-declarations-with-ensures.rs:7:12: 7:24}`
+error[E0277]: the trait bound `&mut &mut u32: Copy` is not satisfied in `{closure@$DIR/contracts-disabled-side-effect-declarations-with-ensures.rs:7:12: 7:24}`
   --> $DIR/contracts-disabled-side-effect-declarations-with-ensures.rs:7:12
    |
 LL | #[requires(*x = 0; true)]
@@ -7,13 +7,13 @@ LL | #[requires(*x = 0; true)]
    |            unsatisfied trait bound
    |            within this `{closure@$DIR/contracts-disabled-side-effect-declarations-with-ensures.rs:7:12: 7:24}`
    |
-   = help: within `{closure@$DIR/contracts-disabled-side-effect-declarations-with-ensures.rs:7:12: 7:24}`, the trait `std::marker::Copy` is not implemented for `&mut &mut u32`
-help: the trait `std::marker::Copy` is implemented for `u32`
+   = help: within `{closure@$DIR/contracts-disabled-side-effect-declarations-with-ensures.rs:7:12: 7:24}`, the trait `Copy` is not implemented for `&mut &mut u32`
+help: the trait `Copy` is implemented for `u32`
   --> $SRC_DIR/core/src/marker.rs:LL:COL
   ::: $SRC_DIR/core/src/marker.rs:LL:COL
    |
    = note: in this macro invocation
-   = note: `std::marker::Copy` is implemented for `&&mut u32`, but not for `&mut &mut u32`
+   = note: `Copy` is implemented for `&&mut u32`, but not for `&mut &mut u32`
 note: required because it's used within this closure
   --> $DIR/contracts-disabled-side-effect-declarations-with-ensures.rs:7:12
    |

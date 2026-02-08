@@ -1,5 +1,4 @@
 // tidy-alphabetical-start
-#![deny(clippy::manual_let_else)]
 #![feature(assert_matches)]
 #![feature(box_patterns)]
 #![feature(if_let_guard)]
@@ -62,13 +61,11 @@ use tracing::{debug, instrument};
 use typeck_root_ctxt::TypeckRootCtxt;
 
 use crate::check::check_fn;
-use crate::coercion::DynamicCoerceMany;
+use crate::coercion::CoerceMany;
 use crate::diverges::Diverges;
 use crate::expectation::Expectation;
 use crate::fn_ctxt::LoweredTy;
 use crate::gather_locals::GatherLocalsVisitor;
-
-rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
 
 #[macro_export]
 macro_rules! type_error_struct {
@@ -200,6 +197,14 @@ fn typeck_with_inspect<'tcx>(
 
         let wf_code = ObligationCauseCode::WellFormed(Some(WellFormedLoc::Ty(def_id)));
         fcx.register_wf_obligation(expected_type.into(), body.value.span, wf_code);
+
+        if let hir::Node::AnonConst(_) = node {
+            fcx.require_type_is_sized(
+                expected_type,
+                body.value.span,
+                ObligationCauseCode::SizedConstOrStatic,
+            );
+        }
 
         fcx.check_expr_coercible_to_type(body.value, expected_type, None);
 
@@ -350,7 +355,7 @@ pub struct BreakableCtxt<'tcx> {
 
     // this is `null` for loops where break with a value is illegal,
     // such as `while`, `for`, and `while let`
-    coerce: Option<DynamicCoerceMany<'tcx>>,
+    coerce: Option<CoerceMany<'tcx>>,
 }
 
 pub struct EnclosingBreakables<'tcx> {

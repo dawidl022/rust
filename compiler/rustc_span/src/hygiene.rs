@@ -132,19 +132,21 @@ impl !PartialOrd for LocalExpnId {}
 /// to maintain separate versions of `ExpnData` hashes for each permutation
 /// of `HashingControls` settings.
 fn assert_default_hashing_controls(ctx: &impl HashStableContext, msg: &str) {
-    match ctx.hashing_controls() {
-        // Note that we require that `hash_spans` be set according to the global
-        // `-Z incremental-ignore-spans` option. Normally, this option is disabled,
-        // which will cause us to require that this method always be called with `Span` hashing
-        // enabled.
-        //
-        // Span hashing can also be disabled without `-Z incremental-ignore-spans`.
-        // This is the case for instance when building a hash for name mangling.
-        // Such configuration must not be used for metadata.
-        HashingControls { hash_spans }
-            if hash_spans != ctx.unstable_opts_incremental_ignore_spans() => {}
-        other => panic!("Attempted hashing of {msg} with non-default HashingControls: {other:?}"),
-    }
+    let hashing_controls = ctx.hashing_controls();
+    let HashingControls { hash_spans } = hashing_controls;
+
+    // Note that we require that `hash_spans` be the inverse of the global
+    // `-Z incremental-ignore-spans` option. Normally, this option is disabled,
+    // in which case `hash_spans` must be true.
+    //
+    // Span hashing can also be disabled without `-Z incremental-ignore-spans`.
+    // This is the case for instance when building a hash for name mangling.
+    // Such configuration must not be used for metadata.
+    assert_eq!(
+        hash_spans,
+        !ctx.unstable_opts_incremental_ignore_spans(),
+        "Attempted hashing of {msg} with non-default HashingControls: {hashing_controls:?}"
+    );
 }
 
 /// A unique hash value associated to an expansion.
@@ -804,7 +806,7 @@ impl SyntaxContext {
 
     /// Like `SyntaxContext::adjust`, but also normalizes `self` to macros 2.0.
     #[inline]
-    pub(crate) fn normalize_to_macros_2_0_and_adjust(&mut self, expn_id: ExpnId) -> Option<ExpnId> {
+    pub fn normalize_to_macros_2_0_and_adjust(&mut self, expn_id: ExpnId) -> Option<ExpnId> {
         HygieneData::with(|data| {
             *self = data.normalize_to_macros_2_0(*self);
             data.adjust(self, expn_id)
@@ -837,11 +839,7 @@ impl SyntaxContext {
     /// ```
     /// This returns `None` if the context cannot be glob-adjusted.
     /// Otherwise, it returns the scope to use when privacy checking (see `adjust` for details).
-    pub(crate) fn glob_adjust(
-        &mut self,
-        expn_id: ExpnId,
-        glob_span: Span,
-    ) -> Option<Option<ExpnId>> {
+    pub fn glob_adjust(&mut self, expn_id: ExpnId, glob_span: Span) -> Option<Option<ExpnId>> {
         HygieneData::with(|data| {
             let mut scope = None;
             let mut glob_ctxt = data.normalize_to_macros_2_0(glob_span.ctxt());
@@ -865,7 +863,7 @@ impl SyntaxContext {
     ///     assert!(self.glob_adjust(expansion, glob_ctxt) == Some(privacy_checking_scope));
     /// }
     /// ```
-    pub(crate) fn reverse_glob_adjust(
+    pub fn reverse_glob_adjust(
         &mut self,
         expn_id: ExpnId,
         glob_span: Span,
@@ -1569,5 +1567,11 @@ impl<CTX: HashStableContext> HashStable<CTX> for ExpnId {
         };
 
         hash.hash_stable(ctx, hasher);
+    }
+}
+
+impl<CTX: HashStableContext> HashStable<CTX> for LocalExpnId {
+    fn hash_stable(&self, hcx: &mut CTX, hasher: &mut StableHasher) {
+        self.to_expn_id().hash_stable(hcx, hasher);
     }
 }

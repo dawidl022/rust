@@ -540,6 +540,7 @@ impl<'a> TraitDef<'a> {
                         .filter(|a| {
                             a.has_any_name(&[
                                 sym::allow,
+                                sym::expect,
                                 sym::warn,
                                 sym::deny,
                                 sym::forbid,
@@ -638,27 +639,27 @@ impl<'a> TraitDef<'a> {
                 GenericParamKind::Type { .. } => {
                     // Extra restrictions on the generics parameters to the
                     // type being derived upon.
+                    let span = param.ident.span.with_ctxt(ctxt);
                     let bounds: Vec<_> = self
                         .additional_bounds
                         .iter()
                         .map(|p| {
-                            cx.trait_bound(
-                                p.to_path(cx, self.span, type_ident, generics),
-                                self.is_const,
-                            )
+                            cx.trait_bound(p.to_path(cx, span, type_ident, generics), self.is_const)
                         })
                         .chain(
                             // Add a bound for the current trait.
-                            self.skip_path_as_bound
-                                .not()
-                                .then(|| cx.trait_bound(trait_path.clone(), self.is_const)),
+                            self.skip_path_as_bound.not().then(|| {
+                                let mut trait_path = trait_path.clone();
+                                trait_path.span = span;
+                                cx.trait_bound(trait_path, self.is_const)
+                            }),
                         )
                         .chain({
                             // Add a `Copy` bound if required.
                             if is_packed && self.needs_copy_as_bound_if_packed {
                                 let p = deriving::path_std!(marker::Copy);
                                 Some(cx.trait_bound(
-                                    p.to_path(cx, self.span, type_ident, generics),
+                                    p.to_path(cx, span, type_ident, generics),
                                     self.is_const,
                                 ))
                             } else {
@@ -671,7 +672,7 @@ impl<'a> TraitDef<'a> {
                         )
                         .collect();
 
-                    cx.typaram(param.ident.span.with_ctxt(ctxt), param.ident, bounds, None)
+                    cx.typaram(span, param.ident, bounds, None)
                 }
                 GenericParamKind::Const { ty, span, .. } => {
                     let const_nodefault_kind = GenericParamKind::Const {
@@ -791,7 +792,8 @@ impl<'a> TraitDef<'a> {
             .collect();
 
         // Create the type of `self`.
-        let path = cx.path_all(self.span, false, vec![type_ident], self_params);
+        let path =
+            cx.path_all(type_ident.span.with_ctxt(ctxt), false, vec![type_ident], self_params);
         let self_type = cx.ty_path(path);
         let rustc_const_unstable =
             cx.path_ident(self.span, Ident::new(sym::rustc_const_unstable, self.span));
@@ -807,24 +809,29 @@ impl<'a> TraitDef<'a> {
                     rustc_ast::AttrItem {
                         unsafety: Safety::Default,
                         path: rustc_const_unstable,
-                        args: AttrArgs::Delimited(DelimArgs {
-                            dspan: DelimSpan::from_single(self.span),
-                            delim: rustc_ast::token::Delimiter::Parenthesis,
-                            tokens: [
-                                TokenKind::Ident(sym::feature, IdentIsRaw::No),
-                                TokenKind::Eq,
-                                TokenKind::lit(LitKind::Str, sym::derive_const, None),
-                                TokenKind::Comma,
-                                TokenKind::Ident(sym::issue, IdentIsRaw::No),
-                                TokenKind::Eq,
-                                TokenKind::lit(LitKind::Str, sym::derive_const_issue, None),
-                            ]
-                            .into_iter()
-                            .map(|kind| {
-                                TokenTree::Token(Token { kind, span: self.span }, Spacing::Alone)
-                            })
-                            .collect(),
-                        }),
+                        args: rustc_ast::ast::AttrItemKind::Unparsed(AttrArgs::Delimited(
+                            DelimArgs {
+                                dspan: DelimSpan::from_single(self.span),
+                                delim: rustc_ast::token::Delimiter::Parenthesis,
+                                tokens: [
+                                    TokenKind::Ident(sym::feature, IdentIsRaw::No),
+                                    TokenKind::Eq,
+                                    TokenKind::lit(LitKind::Str, sym::derive_const, None),
+                                    TokenKind::Comma,
+                                    TokenKind::Ident(sym::issue, IdentIsRaw::No),
+                                    TokenKind::Eq,
+                                    TokenKind::lit(LitKind::Str, sym::derive_const_issue, None),
+                                ]
+                                .into_iter()
+                                .map(|kind| {
+                                    TokenTree::Token(
+                                        Token { kind, span: self.span },
+                                        Spacing::Alone,
+                                    )
+                                })
+                                .collect(),
+                            },
+                        )),
                         tokens: None,
                     },
                     self.span,
@@ -981,16 +988,6 @@ impl<'a> MethodDef<'a> {
         f(cx, span, &substructure)
     }
 
-    fn get_ret_ty(
-        &self,
-        cx: &ExtCtxt<'_>,
-        trait_: &TraitDef<'_>,
-        generics: &Generics,
-        type_ident: Ident,
-    ) -> Box<ast::Ty> {
-        self.ret_ty.to_ty(cx, trait_.span, type_ident, generics)
-    }
-
     fn is_static(&self) -> bool {
         !self.explicit_self
     }
@@ -1063,10 +1060,14 @@ impl<'a> MethodDef<'a> {
             self_arg.into_iter().chain(nonself_args).collect()
         };
 
-        let ret_type = self.get_ret_ty(cx, trait_, generics, type_ident);
+        let ret_type = if let Ty::Unit = &self.ret_ty {
+            ast::FnRetTy::Default(span)
+        } else {
+            ast::FnRetTy::Ty(self.ret_ty.to_ty(cx, span, type_ident, generics))
+        };
 
         let method_ident = Ident::new(self.name, span);
-        let fn_decl = cx.fn_decl(args, ast::FnRetTy::Ty(ret_type));
+        let fn_decl = cx.fn_decl(args, ret_type);
         let body_block = body.into_block(cx, span);
 
         let trait_lo_sp = span.shrink_to_lo();
@@ -1092,6 +1093,7 @@ impl<'a> MethodDef<'a> {
                 contract: None,
                 body: Some(body_block),
                 define_opaque: None,
+                eii_impls: ThinVec::new(),
             })),
             tokens: None,
         })

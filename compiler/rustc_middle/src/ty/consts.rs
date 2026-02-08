@@ -6,6 +6,7 @@ use rustc_macros::{HashStable, TyDecodable, TyEncodable};
 use rustc_type_ir::walk::TypeWalker;
 use rustc_type_ir::{self as ir, TypeFlags, WithCachedTypeInfo};
 
+use crate::mir::interpret::Scalar;
 use crate::ty::{self, Ty, TyCtxt};
 
 mod int;
@@ -93,7 +94,7 @@ impl<'tcx> Const<'tcx> {
     pub fn new_bound(
         tcx: TyCtxt<'tcx>,
         debruijn: ty::DebruijnIndex,
-        bound_const: ty::BoundConst,
+        bound_const: ty::BoundConst<'tcx>,
     ) -> Const<'tcx> {
         Const::new(tcx, ty::ConstKind::Bound(ty::BoundVarIndexKind::Bound(debruijn), bound_const))
     }
@@ -102,7 +103,7 @@ impl<'tcx> Const<'tcx> {
     pub fn new_canonical_bound(tcx: TyCtxt<'tcx>, var: ty::BoundVar) -> Const<'tcx> {
         Const::new(
             tcx,
-            ty::ConstKind::Bound(ty::BoundVarIndexKind::Canonical, ty::BoundConst { var }),
+            ty::ConstKind::Bound(ty::BoundVarIndexKind::Canonical, ty::BoundConst::new(var)),
         )
     }
 
@@ -182,13 +183,13 @@ impl<'tcx> rustc_type_ir::inherent::Const<TyCtxt<'tcx>> for Const<'tcx> {
     fn new_bound(
         interner: TyCtxt<'tcx>,
         debruijn: ty::DebruijnIndex,
-        bound_const: ty::BoundConst,
+        bound_const: ty::BoundConst<'tcx>,
     ) -> Self {
         Const::new_bound(interner, debruijn, bound_const)
     }
 
     fn new_anon_bound(tcx: TyCtxt<'tcx>, debruijn: ty::DebruijnIndex, var: ty::BoundVar) -> Self {
-        Const::new_bound(tcx, debruijn, ty::BoundConst { var })
+        Const::new_bound(tcx, debruijn, ty::BoundConst::new(var))
     }
 
     fn new_canonical_bound(tcx: TyCtxt<'tcx>, var: rustc_type_ir::BoundVar) -> Self {
@@ -260,12 +261,51 @@ impl<'tcx> Const<'tcx> {
 
     /// Attempts to convert to a value.
     ///
-    /// Note that this does not evaluate the constant.
+    /// Note that this does not normalize the constant.
     pub fn try_to_value(self) -> Option<ty::Value<'tcx>> {
         match self.kind() {
             ty::ConstKind::Value(cv) => Some(cv),
             _ => None,
         }
+    }
+
+    /// Converts to a `ValTreeKind::Leaf` value, `panic`'ing
+    /// if this constant is some other kind.
+    ///
+    /// Note that this does not normalize the constant.
+    #[inline]
+    pub fn to_leaf(self) -> ScalarInt {
+        self.to_value().to_leaf()
+    }
+
+    /// Converts to a `ValTreeKind::Branch` value, `panic`'ing
+    /// if this constant is some other kind.
+    ///
+    /// Note that this does not normalize the constant.
+    #[inline]
+    pub fn to_branch(self) -> &'tcx [ty::Const<'tcx>] {
+        self.to_value().to_branch()
+    }
+
+    /// Attempts to convert to a `ValTreeKind::Leaf` value.
+    ///
+    /// Note that this does not normalize the constant.
+    pub fn try_to_leaf(self) -> Option<ScalarInt> {
+        self.try_to_value()?.try_to_leaf()
+    }
+
+    /// Attempts to convert to a `ValTreeKind::Leaf` value.
+    ///
+    /// Note that this does not normalize the constant.
+    pub fn try_to_scalar(self) -> Option<Scalar> {
+        self.try_to_leaf().map(Scalar::Int)
+    }
+
+    /// Attempts to convert to a `ValTreeKind::Branch` value.
+    ///
+    /// Note that this does not normalize the constant.
+    pub fn try_to_branch(self) -> Option<&'tcx [ty::Const<'tcx>]> {
+        self.try_to_value()?.try_to_branch()
     }
 
     /// Convenience method to extract the value of a usize constant,

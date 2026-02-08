@@ -106,9 +106,9 @@ pub struct Cargo {
     rustdocflags: Rustflags,
     hostflags: HostFlags,
     allow_features: String,
-    release_build: bool,
     build_compiler_stage: u32,
     extra_rustflags: Vec<String>,
+    profile: Option<&'static str>,
 }
 
 impl Cargo {
@@ -137,7 +137,11 @@ impl Cargo {
     }
 
     pub fn release_build(&mut self, release_build: bool) {
-        self.release_build = release_build;
+        self.profile = if release_build { Some("release") } else { None };
+    }
+
+    pub fn profile(&mut self, profile: &'static str) {
+        self.profile = Some(profile);
     }
 
     pub fn compiler(&self) -> Compiler {
@@ -327,10 +331,6 @@ impl Cargo {
             self.rustflags.arg("-Clink-arg=-gz");
         }
 
-        // Ignore linker warnings for now. These are complicated to fix and don't affect the build.
-        // FIXME: we should really investigate these...
-        self.rustflags.arg("-Alinker-messages");
-
         // Throughout the build Cargo can execute a number of build scripts
         // compiling C/C++ code and we need to pass compilers, archivers, flags, etc
         // obtained previously to those build scripts.
@@ -407,8 +407,8 @@ impl Cargo {
 
 impl From<Cargo> for BootstrapCommand {
     fn from(mut cargo: Cargo) -> BootstrapCommand {
-        if cargo.release_build {
-            cargo.args.insert(0, "--release".into());
+        if let Some(profile) = cargo.profile {
+            cargo.args.insert(0, format!("--profile={profile}").into());
         }
 
         for arg in &cargo.extra_rustflags {
@@ -503,6 +503,11 @@ impl Builder<'_> {
         let out_dir = self.stage_out(compiler, mode);
         cargo.env("CARGO_TARGET_DIR", &out_dir);
 
+        // Set this unconditionally. Cargo silently ignores `CARGO_BUILD_WARNINGS` when `-Z
+        // warnings` isn't present, which is hard to debug, and it's not worth the effort to keep
+        // them in sync.
+        cargo.arg("-Zwarnings");
+
         // Bootstrap makes a lot of assumptions about the artifacts produced in the target
         // directory. If users override the "build directory" using `build-dir`
         // (https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#build-dir), then
@@ -593,7 +598,7 @@ impl Builder<'_> {
             build_stamp::clear_if_dirty(self, &my_out, &rustdoc);
         }
 
-        let profile_var = |name: &str| cargo_profile_var(name, &self.config);
+        let profile_var = |name: &str| cargo_profile_var(name, &self.config, mode);
 
         // See comment in rustc_llvm/build.rs for why this is necessary, largely llvm-config
         // needs to not accidentally link to libLLVM in stage0/lib.
@@ -655,23 +660,15 @@ impl Builder<'_> {
             rustflags.arg(sysroot_str);
         }
 
-        let use_new_symbol_mangling = match self.config.rust_new_symbol_mangling {
-            Some(setting) => {
-                // If an explicit setting is given, use that
-                setting
+        let use_new_symbol_mangling = self.config.rust_new_symbol_mangling.or_else(|| {
+            if mode != Mode::Std {
+                // The compiler and tools default to the new scheme
+                Some(true)
+            } else {
+                // std follows the flag's default, which per compiler-team#938 is v0 on nightly
+                None
             }
-            // Per compiler-team#938, v0 mangling is used on nightly
-            None if self.config.channel == "dev" || self.config.channel == "nightly" => true,
-            None => {
-                if mode == Mode::Std {
-                    // The standard library defaults to the legacy scheme
-                    false
-                } else {
-                    // The compiler and tools default to the new scheme
-                    true
-                }
-            }
-        };
+        });
 
         // By default, windows-rs depends on a native library that doesn't get copied into the
         // sysroot. Passing this cfg enables raw-dylib support instead, which makes the native
@@ -682,10 +679,12 @@ impl Builder<'_> {
             rustflags.arg("--cfg=windows_raw_dylib");
         }
 
-        if use_new_symbol_mangling {
-            rustflags.arg("-Csymbol-mangling-version=v0");
-        } else {
-            rustflags.arg("-Csymbol-mangling-version=legacy");
+        if let Some(usm) = use_new_symbol_mangling {
+            rustflags.arg(if usm {
+                "-Csymbol-mangling-version=v0"
+            } else {
+                "-Csymbol-mangling-version=legacy"
+            });
         }
 
         // Always enable move/copy annotations for profiler visibility (non-stage0 only).
@@ -1025,18 +1024,26 @@ impl Builder<'_> {
                 if let Some(ref map_to) =
                     self.build.debuginfo_map_to(GitRepo::Rustc, RemapScheme::NonCompiler)
                 {
+                    // Tell the compiler which prefix was used for remapping the standard library
                     cargo.env("CFG_VIRTUAL_RUST_SOURCE_BASE_DIR", map_to);
                 }
 
                 if let Some(ref map_to) =
                     self.build.debuginfo_map_to(GitRepo::Rustc, RemapScheme::Compiler)
                 {
-                    // When building compiler sources, we want to apply the compiler remap scheme.
-                    cargo.env(
-                        "RUSTC_DEBUGINFO_MAP",
-                        format!("{}={}", self.build.src.display(), map_to),
-                    );
+                    // Tell the compiler which prefix was used for remapping the compiler it-self
                     cargo.env("CFG_VIRTUAL_RUSTC_DEV_SOURCE_BASE_DIR", map_to);
+
+                    // When building compiler sources, we want to apply the compiler remap scheme.
+                    let map = [
+                        // Cargo use relative paths for workspace members, so let's remap those.
+                        format!("compiler/={map_to}/compiler"),
+                        // rustc creates absolute paths (in part bc of the `rust-src` unremap
+                        // and for working directory) so let's remap the build directory as well.
+                        format!("{}={map_to}", self.build.src.display()),
+                    ]
+                    .join("\t");
+                    cargo.env("RUSTC_DEBUGINFO_MAP", map);
                 }
             }
             Mode::Std
@@ -1047,10 +1054,16 @@ impl Builder<'_> {
                 if let Some(ref map_to) =
                     self.build.debuginfo_map_to(GitRepo::Rustc, RemapScheme::NonCompiler)
                 {
-                    cargo.env(
-                        "RUSTC_DEBUGINFO_MAP",
-                        format!("{}={}", self.build.src.display(), map_to),
-                    );
+                    // When building the standard library sources, we want to apply the std remap scheme.
+                    let map = [
+                        // Cargo use relative paths for workspace members, so let's remap those.
+                        format!("library/={map_to}/library"),
+                        // rustc creates absolute paths (in part bc of the `rust-src` unremap
+                        // and for working directory) so let's remap the build directory as well.
+                        format!("{}={map_to}", self.build.src.display()),
+                    ]
+                    .join("\t");
+                    cargo.env("RUSTC_DEBUGINFO_MAP", map);
                 }
             }
         }
@@ -1075,6 +1088,10 @@ impl Builder<'_> {
 
         // Enable usage of unstable features
         cargo.env("RUSTC_BOOTSTRAP", "1");
+
+        if matches!(mode, Mode::Std) {
+            cargo.arg("-Zno-embed-metadata");
+        }
 
         if self.config.dump_bootstrap_shims {
             prepare_behaviour_dump_dir(self.build);
@@ -1193,8 +1210,10 @@ impl Builder<'_> {
             lint_flags.push("-Wunused_lifetimes");
 
             if self.config.deny_warnings {
-                lint_flags.push("-Dwarnings");
-                rustdocflags.arg("-Dwarnings");
+                // We use this instead of `lint_flags` so that we don't have to rebuild all
+                // workspace dependencies when `deny-warnings` changes, but we still get an error
+                // immediately instead of having to wait until the next rebuild.
+                cargo.env("CARGO_BUILD_WARNINGS", "deny");
             }
 
             rustdocflags.arg("-Wrustdoc::invalid_codeblock_attributes");
@@ -1233,13 +1252,7 @@ impl Builder<'_> {
         // when compiling the standard library, since this might be linked into the final outputs
         // produced by rustc. Since this mitigation is only available on Windows, only enable it
         // for the standard library in case the compiler is run on a non-Windows platform.
-        // This is not needed for stage 0 artifacts because these will only be used for building
-        // the stage 1 compiler.
-        if cfg!(windows)
-            && mode == Mode::Std
-            && self.config.control_flow_guard
-            && compiler.stage >= 1
-        {
+        if cfg!(windows) && mode == Mode::Std && self.config.control_flow_guard {
             rustflags.arg("-Ccontrol-flow-guard");
         }
 
@@ -1247,9 +1260,7 @@ impl Builder<'_> {
         // standard library, since this might be linked into the final outputs produced by rustc.
         // Since this mitigation is only available on Windows, only enable it for the standard
         // library in case the compiler is run on a non-Windows platform.
-        // This is not needed for stage 0 artifacts because these will only be used for building
-        // the stage 1 compiler.
-        if cfg!(windows) && mode == Mode::Std && self.config.ehcont_guard && compiler.stage >= 1 {
+        if cfg!(windows) && mode == Mode::Std && self.config.ehcont_guard {
             rustflags.arg("-Zehcont-guard");
         }
 
@@ -1266,51 +1277,12 @@ impl Builder<'_> {
         rustdocflags.arg("--crate-version").arg(&rust_version);
 
         // Environment variables *required* throughout the build
-        //
-        // FIXME: should update code to not require this env var
 
-        // The host this new compiler will *run* on.
-        cargo.env("CFG_COMPILER_HOST_TRIPLE", target.triple);
         // The host this new compiler is being *built* on.
         cargo.env("CFG_COMPILER_BUILD_TRIPLE", compiler.host.triple);
 
         // Set this for all builds to make sure doc builds also get it.
         cargo.env("CFG_RELEASE_CHANNEL", &self.config.channel);
-
-        // This one's a bit tricky. As of the time of this writing the compiler
-        // links to the `winapi` crate on crates.io. This crate provides raw
-        // bindings to Windows system functions, sort of like libc does for
-        // Unix. This crate also, however, provides "import libraries" for the
-        // MinGW targets. There's an import library per dll in the windows
-        // distribution which is what's linked to. These custom import libraries
-        // are used because the winapi crate can reference Windows functions not
-        // present in the MinGW import libraries.
-        //
-        // For example MinGW may ship libdbghelp.a, but it may not have
-        // references to all the functions in the dbghelp dll. Instead the
-        // custom import library for dbghelp in the winapi crates has all this
-        // information.
-        //
-        // Unfortunately for us though the import libraries are linked by
-        // default via `-ldylib=winapi_foo`. That is, they're linked with the
-        // `dylib` type with a `winapi_` prefix (so the winapi ones don't
-        // conflict with the system MinGW ones). This consequently means that
-        // the binaries we ship of things like rustc_codegen_llvm (aka the rustc_codegen_llvm
-        // DLL) when linked against *again*, for example with procedural macros
-        // or plugins, will trigger the propagation logic of `-ldylib`, passing
-        // `-lwinapi_foo` to the linker again. This isn't actually available in
-        // our distribution, however, so the link fails.
-        //
-        // To solve this problem we tell winapi to not use its bundled import
-        // libraries. This means that it will link to the system MinGW import
-        // libraries by default, and the `-ldylib=foo` directives will still get
-        // passed to the final linker, but they'll look like `-lfoo` which can
-        // be resolved because MinGW has the import library. The downside is we
-        // don't get newer functions from Windows, but we don't use any of them
-        // anyway.
-        if !mode.is_tool() {
-            cargo.env("WINAPI_NO_BUNDLED_LIBRARIES", "1");
-        }
 
         // verbose cargo output is very noisy, so only enable it with -vv
         for _ in 0..self.verbosity.saturating_sub(1) {
@@ -1409,9 +1381,18 @@ impl Builder<'_> {
             .unwrap_or(&self.config.rust_rustflags)
             .clone();
 
-        let release_build = self.config.rust_optimize.is_release() &&
-            // cargo bench/install do not accept `--release` and miri doesn't want it
-            !matches!(cmd_kind, Kind::Bench | Kind::Install | Kind::Miri | Kind::MiriSetup | Kind::MiriTest);
+        let profile =
+            if matches!(cmd_kind, Kind::Bench | Kind::Miri | Kind::MiriSetup | Kind::MiriTest) {
+                // Use the default profile for bench/miri
+                None
+            } else {
+                match (mode, self.config.rust_optimize.is_release()) {
+                    // Some std configuration exists in its own profile
+                    (Mode::Std, _) => Some("dist"),
+                    (_, true) => Some("release"),
+                    (_, false) => Some("dev"),
+                }
+            };
 
         Cargo {
             command: cargo,
@@ -1423,14 +1404,19 @@ impl Builder<'_> {
             rustdocflags,
             hostflags,
             allow_features,
-            release_build,
             build_compiler_stage,
             extra_rustflags,
+            profile,
         }
     }
 }
 
-pub fn cargo_profile_var(name: &str, config: &Config) -> String {
-    let profile = if config.rust_optimize.is_release() { "RELEASE" } else { "DEV" };
+pub fn cargo_profile_var(name: &str, config: &Config, mode: Mode) -> String {
+    let profile = match (mode, config.rust_optimize.is_release()) {
+        // Some std configuration exists in its own profile
+        (Mode::Std, _) => "DIST",
+        (_, true) => "RELEASE",
+        (_, false) => "DEV",
+    };
     format!("CARGO_PROFILE_{profile}_{name}")
 }

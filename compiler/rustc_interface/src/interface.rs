@@ -7,7 +7,6 @@ use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::jobserver::{self, Proxy};
 use rustc_data_structures::stable_hasher::StableHasher;
-use rustc_errors::registry::Registry;
 use rustc_errors::{DiagCtxtHandle, ErrorGuaranteed};
 use rustc_lint::LintStore;
 use rustc_middle::ty;
@@ -54,16 +53,13 @@ pub struct Compiler {
 pub(crate) fn parse_cfg(dcx: DiagCtxtHandle<'_>, cfgs: Vec<String>) -> Cfg {
     cfgs.into_iter()
         .map(|s| {
-            let psess = ParseSess::emitter_with_note(
-                vec![crate::DEFAULT_LOCALE_RESOURCE, rustc_parse::DEFAULT_LOCALE_RESOURCE],
-                format!("this occurred on the command line: `--cfg={s}`"),
-            );
+            let psess = ParseSess::emitter_with_note(format!(
+                "this occurred on the command line: `--cfg={s}`"
+            ));
             let filename = FileName::cfg_spec_source_code(&s);
 
             macro_rules! error {
                 ($reason: expr) => {
-                    #[allow(rustc::untranslatable_diagnostic)]
-                    #[allow(rustc::diagnostic_outside_of_impl)]
                     dcx.fatal(format!("invalid `--cfg` argument: `{s}` ({})", $reason));
                 };
             }
@@ -128,52 +124,39 @@ pub(crate) fn parse_check_cfg(dcx: DiagCtxtHandle<'_>, specs: Vec<String>) -> Ch
     let mut check_cfg = CheckCfg { exhaustive_names, exhaustive_values, ..CheckCfg::default() };
 
     for s in specs {
-        let psess = ParseSess::emitter_with_note(
-            vec![crate::DEFAULT_LOCALE_RESOURCE, rustc_parse::DEFAULT_LOCALE_RESOURCE],
-            format!("this occurred on the command line: `--check-cfg={s}`"),
-        );
+        let psess = ParseSess::emitter_with_note(format!(
+            "this occurred on the command line: `--check-cfg={s}`"
+        ));
         let filename = FileName::cfg_spec_source_code(&s);
 
         const VISIT: &str =
             "visit <https://doc.rust-lang.org/nightly/rustc/check-cfg.html> for more details";
 
         macro_rules! error {
-            ($reason:expr) => {
-                #[allow(rustc::untranslatable_diagnostic)]
-                #[allow(rustc::diagnostic_outside_of_impl)]
-                {
-                    let mut diag =
-                        dcx.struct_fatal(format!("invalid `--check-cfg` argument: `{s}`"));
-                    diag.note($reason);
-                    diag.note(VISIT);
-                    diag.emit()
-                }
-            };
-            (in $arg:expr, $reason:expr) => {
-                #[allow(rustc::untranslatable_diagnostic)]
-                #[allow(rustc::diagnostic_outside_of_impl)]
-                {
-                    let mut diag =
-                        dcx.struct_fatal(format!("invalid `--check-cfg` argument: `{s}`"));
+            ($reason:expr) => {{
+                let mut diag = dcx.struct_fatal(format!("invalid `--check-cfg` argument: `{s}`"));
+                diag.note($reason);
+                diag.note(VISIT);
+                diag.emit()
+            }};
+            (in $arg:expr, $reason:expr) => {{
+                let mut diag = dcx.struct_fatal(format!("invalid `--check-cfg` argument: `{s}`"));
 
-                    let pparg = rustc_ast_pretty::pprust::meta_list_item_to_string($arg);
-                    if let Some(lit) = $arg.lit() {
-                        let (lit_kind_article, lit_kind_descr) = {
-                            let lit_kind = lit.as_token_lit().kind;
-                            (lit_kind.article(), lit_kind.descr())
-                        };
-                        diag.note(format!(
-                            "`{pparg}` is {lit_kind_article} {lit_kind_descr} literal"
-                        ));
-                    } else {
-                        diag.note(format!("`{pparg}` is invalid"));
-                    }
-
-                    diag.note($reason);
-                    diag.note(VISIT);
-                    diag.emit()
+                let pparg = rustc_ast_pretty::pprust::meta_list_item_to_string($arg);
+                if let Some(lit) = $arg.lit() {
+                    let (lit_kind_article, lit_kind_descr) = {
+                        let lit_kind = lit.as_token_lit().kind;
+                        (lit_kind.article(), lit_kind.descr())
+                    };
+                    diag.note(format!("`{pparg}` is {lit_kind_article} {lit_kind_descr} literal"));
+                } else {
+                    diag.note(format!("`{pparg}` is invalid"));
                 }
-            };
+
+                diag.note($reason);
+                diag.note(VISIT);
+                diag.emit()
+            }};
         }
 
         let expected_error = || -> ! {
@@ -388,9 +371,6 @@ pub struct Config {
     pub make_codegen_backend:
         Option<Box<dyn FnOnce(&config::Options, &Target) -> Box<dyn CodegenBackend> + Send>>,
 
-    /// Registry of diagnostics codes.
-    pub registry: Registry,
-
     /// The inner atomic value is set to true when a feature marked as `internal` is
     /// enabled. Makes it so that "please report a bug" is hidden, as ICEs with
     /// internal features are wontfix, and they are usually the cause of the ICEs.
@@ -400,8 +380,6 @@ pub struct Config {
 /// Initialize jobserver before getting `jobserver::client` and `build_session`.
 pub(crate) fn initialize_checked_jobserver(early_dcx: &EarlyDiagCtxt) {
     jobserver::initialize_checked(|err| {
-        #[allow(rustc::untranslatable_diagnostic)]
-        #[allow(rustc::diagnostic_outside_of_impl)]
         early_dcx
             .early_struct_warn(err)
             .with_note("the build environment is likely misconfigured")
@@ -427,6 +405,7 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
         &early_dcx,
         &config.opts.target_triple,
         config.opts.sysroot.path(),
+        config.opts.unstable_opts.unstable_options,
     );
     let file_loader = config.file_loader.unwrap_or_else(|| Box::new(RealFileLoader));
     let path_mapping = config.opts.file_path_mapping();
@@ -467,15 +446,8 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
                 config.opts.unstable_opts.translate_directionality_markers,
             ) {
                 Ok(bundle) => bundle,
-                Err(e) => {
-                    // We can't translate anything if we failed to load translations
-                    #[allow(rustc::untranslatable_diagnostic)]
-                    early_dcx.early_fatal(format!("failed to load fluent bundle: {e}"))
-                }
+                Err(e) => early_dcx.early_fatal(format!("failed to load fluent bundle: {e}")),
             };
-
-            let mut locale_resources = config.locale_resources;
-            locale_resources.push(codegen_backend.locale_resource());
 
             let mut sess = rustc_session::build_session(
                 config.opts,
@@ -486,8 +458,7 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
                     temps_dir,
                 },
                 bundle,
-                config.registry,
-                locale_resources,
+                config.locale_resources,
                 config.lint_caps,
                 target,
                 util::rustc_version_str().unwrap_or("unknown"),
@@ -496,6 +467,7 @@ pub fn run_compiler<R: Send>(config: Config, f: impl FnOnce(&Compiler) -> R + Se
             );
 
             codegen_backend.init(&sess);
+            sess.replaced_intrinsics = FxHashSet::from_iter(codegen_backend.replaced_intrinsics());
 
             let cfg = parse_cfg(sess.dcx(), config.crate_cfg);
             let mut cfg = config::build_configuration(&sess, cfg);

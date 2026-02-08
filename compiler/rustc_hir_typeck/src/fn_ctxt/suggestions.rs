@@ -5,13 +5,13 @@ use core::iter;
 use hir::def_id::LocalDefId;
 use rustc_ast::util::parser::ExprPrecedence;
 use rustc_data_structures::packed::Pu128;
-use rustc_errors::{Applicability, Diag, MultiSpan, listify};
+use rustc_errors::{Applicability, Diag, MultiSpan, inline_fluent, listify};
 use rustc_hir::def::{CtorKind, CtorOf, DefKind, Res};
 use rustc_hir::lang_items::LangItem;
 use rustc_hir::{
     self as hir, Arm, CoroutineDesugaring, CoroutineKind, CoroutineSource, Expr, ExprKind,
-    GenericBound, HirId, Node, PatExpr, PatExprKind, Path, QPath, Stmt, StmtKind, TyKind,
-    WherePredicateKind, expr_needs_parens, is_range_literal,
+    GenericBound, HirId, LoopSource, Node, PatExpr, PatExprKind, Path, QPath, Stmt, StmtKind,
+    TyKind, WherePredicateKind, expr_needs_parens, is_range_literal,
 };
 use rustc_hir_analysis::hir_ty_lowering::HirTyLowerer;
 use rustc_hir_analysis::suggest_impl_trait;
@@ -33,10 +33,10 @@ use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt as _
 use tracing::{debug, instrument};
 
 use super::FnCtxt;
+use crate::errors;
 use crate::fn_ctxt::rustc_span::BytePos;
 use crate::method::probe;
 use crate::method::probe::{IsSuggestion, Mode, ProbeScope};
-use crate::{errors, fluent_generated as fluent};
 
 impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     pub(crate) fn body_fn_sig(&self) -> Option<ty::FnSig<'tcx>> {
@@ -482,7 +482,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 let sugg = prefix_wrap(".map(|x| x.as_str())");
                 err.span_suggestion_verbose(
                     expr.span.shrink_to_hi(),
-                    fluent::hir_typeck_convert_to_str,
+                    inline_fluent!("try converting the passed type into a `&str`"),
                     sugg,
                     Applicability::MachineApplicable,
                 );
@@ -1170,15 +1170,23 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         }
         let found = self.resolve_vars_if_possible(found);
 
-        let in_loop = self.is_loop(id)
-            || self
-                .tcx
+        let innermost_loop = if self.is_loop(id) {
+            Some(self.tcx.hir_node(id))
+        } else {
+            self.tcx
                 .hir_parent_iter(id)
                 .take_while(|(_, node)| {
                     // look at parents until we find the first body owner
                     node.body_id().is_none()
                 })
-                .any(|(parent_id, _)| self.is_loop(parent_id));
+                .find_map(|(parent_id, node)| self.is_loop(parent_id).then_some(node))
+        };
+        let can_break_with_value = innermost_loop.is_some_and(|node| {
+            matches!(
+                node,
+                Node::Expr(Expr { kind: ExprKind::Loop(_, _, LoopSource::Loop, ..), .. })
+            )
+        });
 
         let in_local_statement = self.is_local_statement(id)
             || self
@@ -1186,7 +1194,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 .hir_parent_iter(id)
                 .any(|(parent_id, _)| self.is_local_statement(parent_id));
 
-        if in_loop && in_local_statement {
+        if can_break_with_value && in_local_statement {
             err.multipart_suggestion(
                 "you might have meant to break the loop with this value",
                 vec![
@@ -1924,25 +1932,94 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     None,
                 );
             } else {
+                let mut suggest_derive = true;
                 if let Some(errors) =
                     self.type_implements_trait_shallow(clone_trait_did, expected_ty, self.param_env)
                 {
+                    let manually_impl = "consider manually implementing `Clone` to avoid the \
+                        implicit type parameter bounds";
                     match &errors[..] {
                         [] => {}
                         [error] => {
-                            diag.help(format!(
-                                "`Clone` is not implemented because the trait bound `{}` is \
-                                 not satisfied",
-                                error.obligation.predicate,
-                            ));
+                            let msg = "`Clone` is not implemented because a trait bound is not \
+                                satisfied";
+                            if let traits::ObligationCauseCode::ImplDerived(data) =
+                                error.obligation.cause.code()
+                            {
+                                let mut span: MultiSpan = data.span.into();
+                                if self.tcx.is_automatically_derived(data.impl_or_alias_def_id) {
+                                    span.push_span_label(
+                                        data.span,
+                                        format!(
+                                            "derive introduces an implicit `{}` bound",
+                                            error.obligation.predicate
+                                        ),
+                                    );
+                                }
+                                diag.span_help(span, msg);
+                                if self.tcx.is_automatically_derived(data.impl_or_alias_def_id)
+                                    && data.impl_or_alias_def_id.is_local()
+                                {
+                                    diag.help(manually_impl);
+                                    suggest_derive = false;
+                                }
+                            } else {
+                                diag.help(msg);
+                            }
                         }
                         _ => {
-                            diag.help(format!(
-                                "`Clone` is not implemented because the following trait bounds \
-                                 could not be satisfied: {}",
-                                listify(&errors, |e| format!("`{}`", e.obligation.predicate))
-                                    .unwrap(),
-                            ));
+                            let unsatisfied_bounds: Vec<_> = errors
+                                .iter()
+                                .filter_map(|error| match error.obligation.cause.code() {
+                                    traits::ObligationCauseCode::ImplDerived(data) => {
+                                        let pre = if self
+                                            .tcx
+                                            .is_automatically_derived(data.impl_or_alias_def_id)
+                                        {
+                                            "derive introduces an implicit "
+                                        } else {
+                                            ""
+                                        };
+                                        Some((
+                                            data.span,
+                                            format!(
+                                                "{pre}unsatisfied trait bound `{}`",
+                                                error.obligation.predicate
+                                            ),
+                                        ))
+                                    }
+                                    _ => None,
+                                })
+                                .collect();
+                            let msg = "`Clone` is not implemented because the some trait bounds \
+                                could not be satisfied";
+                            if errors.len() == unsatisfied_bounds.len() {
+                                let mut unsatisfied_bounds_spans: MultiSpan = unsatisfied_bounds
+                                    .iter()
+                                    .map(|(span, _)| *span)
+                                    .collect::<Vec<Span>>()
+                                    .into();
+                                for (span, label) in unsatisfied_bounds {
+                                    unsatisfied_bounds_spans.push_span_label(span, label);
+                                }
+                                diag.span_help(unsatisfied_bounds_spans, msg);
+                                if errors.iter().all(|error| match error.obligation.cause.code() {
+                                    traits::ObligationCauseCode::ImplDerived(data) => {
+                                        self.tcx.is_automatically_derived(data.impl_or_alias_def_id)
+                                            && data.impl_or_alias_def_id.is_local()
+                                    }
+                                    _ => false,
+                                }) {
+                                    diag.help(manually_impl);
+                                    suggest_derive = false;
+                                }
+                            } else {
+                                diag.help(format!(
+                                    "{msg}: {}",
+                                    listify(&errors, |e| format!("`{}`", e.obligation.predicate))
+                                        .unwrap(),
+                                ));
+                            }
                         }
                     }
                     for error in errors {
@@ -1960,7 +2037,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                         }
                     }
                 }
-                self.suggest_derive(diag, &vec![(trait_ref.upcast(self.tcx), None, None)]);
+                if suggest_derive {
+                    self.suggest_derive(diag, &vec![(trait_ref.upcast(self.tcx), None, None)]);
+                }
             }
         }
     }

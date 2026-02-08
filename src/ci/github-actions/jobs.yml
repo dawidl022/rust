@@ -152,8 +152,8 @@ try:
   - <<: *job-dist-x86_64-linux
 
 # Jobs that only run when explicitly invoked in one of the following ways:
-# - comment `@bors2 try jobs=<job-name>`
-# - `try-job: <job-name>` in the PR description and comment `@bors try` or `@bors2 try`.
+# - comment `@bors try jobs=<job-name>`
+# - `try-job: <job-name>` in the PR description and comment `@bors try`.
 optional:
   # This job is used just to test optional jobs.
   # It will be replaced by tier 2 and tier 3 jobs in the future.
@@ -232,7 +232,10 @@ auto:
   - name: dist-powerpc-linux
     <<: *job-linux-4c
 
-  - name: dist-powerpc64-linux
+  - name: dist-powerpc64-linux-gnu
+    <<: *job-linux-4c
+
+  - name: dist-powerpc64-linux-musl
     <<: *job-linux-4c
 
   - name: dist-powerpc64le-linux-gnu
@@ -456,8 +459,7 @@ auto:
       # Ensure that host tooling is built to support our minimum support macOS version.
       MACOSX_DEPLOYMENT_TARGET: 10.12
       MACOSX_STD_DEPLOYMENT_TARGET: 10.12
-      SELECT_XCODE: /Applications/Xcode_15.4.app
-      USE_XCODE_CLANG: 1
+      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
       DIST_REQUIRE_ALL_TOOLS: 1
       CODEGEN_BACKENDS: llvm,cranelift
     <<: *job-macos
@@ -472,7 +474,7 @@ auto:
       # FIXME(madsmtm): This might be redundant, as we're not building host tooling here (?)
       MACOSX_DEPLOYMENT_TARGET: 10.12
       MACOSX_STD_DEPLOYMENT_TARGET: 10.12
-      SELECT_XCODE: /Applications/Xcode_15.2.app
+      DEVELOPER_DIR: /Applications/Xcode_15.2.app/Contents/Developer
     <<: *job-macos
 
   - name: dist-aarch64-apple
@@ -493,8 +495,7 @@ auto:
       # supports the hardware.
       MACOSX_DEPLOYMENT_TARGET: 11.0
       MACOSX_STD_DEPLOYMENT_TARGET: 11.0
-      SELECT_XCODE: /Applications/Xcode_15.4.app
-      USE_XCODE_CLANG: 1
+      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
       DIST_REQUIRE_ALL_TOOLS: 1
       CODEGEN_BACKENDS: llvm,cranelift
     <<: *job-macos
@@ -508,8 +509,7 @@ auto:
         --enable-sanitizers
         --enable-profiler
         --set rust.jemalloc
-      SELECT_XCODE: /Applications/Xcode_15.4.app
-      USE_XCODE_CLANG: 1
+      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
       # Aarch64 tooling only needs to support macOS 11.0 and up as nothing else
       # supports the hardware, so only need to test it there.
       MACOSX_DEPLOYMENT_TARGET: 11.0

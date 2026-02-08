@@ -10,12 +10,14 @@
 #![feature(never_type)]
 #![feature(proc_macro_internals)]
 #![feature(result_option_map_or_default)]
+#![feature(strip_circumfix)]
 #![feature(trusted_len)]
 // tidy-alphabetical-end
 
 pub use rmeta::provide;
 
 mod dependency_format;
+mod eii;
 mod foreign_modules;
 mod native_libs;
 mod rmeta;
@@ -32,5 +34,3 @@ pub use native_libs::{
     try_find_native_static_library, walk_native_lib_search_dirs,
 };
 pub use rmeta::{EncodedMetadata, METADATA_HEADER, encode_metadata, rendered_const};
-
-rustc_fluent_macro::fluent_messages! { "../messages.ftl" }

@@ -6,16 +6,16 @@ use std::sync::atomic::AtomicBool;
 
 use rustc_abi::Align;
 use rustc_data_structures::profiling::TimePassesFormat;
+use rustc_errors::ColorConfig;
 use rustc_errors::emitter::HumanReadableErrorType;
-use rustc_errors::{ColorConfig, registry};
-use rustc_hir::attrs::NativeLibKind;
+use rustc_hir::attrs::{CollapseMacroDebuginfo, NativeLibKind};
 use rustc_session::config::{
-    AnnotateMoves, AutoDiff, BranchProtection, CFGuard, Cfg, CollapseMacroDebuginfo, CoverageLevel,
-    CoverageOptions, DebugInfo, DumpMonoStatsFormat, ErrorOutputType, ExternEntry, ExternLocation,
-    Externs, FmtDebug, FunctionReturn, InliningThreshold, Input, InstrumentCoverage,
-    InstrumentXRay, LinkSelfContained, LinkerPluginLto, LocationDetail, LtoCli, MirIncludeSpans,
-    NextSolverConfig, Offload, Options, OutFileName, OutputType, OutputTypes, PAuthKey, PacRet,
-    Passes, PatchableFunctionEntry, Polonius, ProcMacroExecutionStrategy, Strip, SwitchWithOptPath,
+    AnnotateMoves, AutoDiff, BranchProtection, CFGuard, Cfg, CoverageLevel, CoverageOptions,
+    DebugInfo, DumpMonoStatsFormat, ErrorOutputType, ExternEntry, ExternLocation, Externs,
+    FmtDebug, FunctionReturn, InliningThreshold, Input, InstrumentCoverage, InstrumentXRay,
+    LinkSelfContained, LinkerPluginLto, LocationDetail, LtoCli, MirIncludeSpans, NextSolverConfig,
+    Offload, Options, OutFileName, OutputType, OutputTypes, PAuthKey, PacRet, Passes,
+    PatchableFunctionEntry, Polonius, ProcMacroExecutionStrategy, Strip, SwitchWithOptPath,
     SymbolManglingVersion, WasiExecModel, build_configuration, build_session_options,
     rustc_optgroups,
 };
@@ -46,6 +46,7 @@ where
         &early_dcx,
         &sessopts.target_triple,
         sessopts.sysroot.path(),
+        sessopts.unstable_opts.unstable_options,
     );
     let hash_kind = sessopts.unstable_opts.src_hash_algorithm(&target);
     let checksum_hash_kind = sessopts.unstable_opts.checksum_hash_algorithm();
@@ -71,7 +72,6 @@ where
             sessopts,
             io,
             None,
-            registry::Registry::new(&[]),
             vec![],
             Default::default(),
             target,
@@ -321,7 +321,7 @@ fn test_search_paths_tracking_hash_different_order() {
     let early_dcx = EarlyDiagCtxt::new(JSON);
     const JSON: ErrorOutputType = ErrorOutputType::Json {
         pretty: false,
-        json_rendered: HumanReadableErrorType::Default { short: false },
+        json_rendered: HumanReadableErrorType { short: false, unicode: false },
         color_config: ColorConfig::Never,
     };
 
@@ -378,7 +378,7 @@ fn test_native_libs_tracking_hash_different_values() {
         NativeLib {
             name: String::from("a"),
             new_name: None,
-            kind: NativeLibKind::Static { bundle: None, whole_archive: None },
+            kind: NativeLibKind::Static { bundle: None, whole_archive: None, export_symbols: None },
             verbatim: None,
         },
         NativeLib {
@@ -400,7 +400,7 @@ fn test_native_libs_tracking_hash_different_values() {
         NativeLib {
             name: String::from("a"),
             new_name: None,
-            kind: NativeLibKind::Static { bundle: None, whole_archive: None },
+            kind: NativeLibKind::Static { bundle: None, whole_archive: None, export_symbols: None },
             verbatim: None,
         },
         NativeLib {
@@ -422,13 +422,13 @@ fn test_native_libs_tracking_hash_different_values() {
         NativeLib {
             name: String::from("a"),
             new_name: None,
-            kind: NativeLibKind::Static { bundle: None, whole_archive: None },
+            kind: NativeLibKind::Static { bundle: None, whole_archive: None, export_symbols: None },
             verbatim: None,
         },
         NativeLib {
             name: String::from("b"),
             new_name: None,
-            kind: NativeLibKind::Static { bundle: None, whole_archive: None },
+            kind: NativeLibKind::Static { bundle: None, whole_archive: None, export_symbols: None },
             verbatim: None,
         },
         NativeLib {
@@ -444,7 +444,7 @@ fn test_native_libs_tracking_hash_different_values() {
         NativeLib {
             name: String::from("a"),
             new_name: None,
-            kind: NativeLibKind::Static { bundle: None, whole_archive: None },
+            kind: NativeLibKind::Static { bundle: None, whole_archive: None, export_symbols: None },
             verbatim: None,
         },
         NativeLib {
@@ -466,7 +466,7 @@ fn test_native_libs_tracking_hash_different_values() {
         NativeLib {
             name: String::from("a"),
             new_name: None,
-            kind: NativeLibKind::Static { bundle: None, whole_archive: None },
+            kind: NativeLibKind::Static { bundle: None, whole_archive: None, export_symbols: None },
             verbatim: None,
         },
         NativeLib {
@@ -500,7 +500,7 @@ fn test_native_libs_tracking_hash_different_order() {
         NativeLib {
             name: String::from("a"),
             new_name: None,
-            kind: NativeLibKind::Static { bundle: None, whole_archive: None },
+            kind: NativeLibKind::Static { bundle: None, whole_archive: None, export_symbols: None },
             verbatim: None,
         },
         NativeLib {
@@ -527,7 +527,7 @@ fn test_native_libs_tracking_hash_different_order() {
         NativeLib {
             name: String::from("a"),
             new_name: None,
-            kind: NativeLibKind::Static { bundle: None, whole_archive: None },
+            kind: NativeLibKind::Static { bundle: None, whole_archive: None, export_symbols: None },
             verbatim: None,
         },
         NativeLib {
@@ -548,7 +548,7 @@ fn test_native_libs_tracking_hash_different_order() {
         NativeLib {
             name: String::from("a"),
             new_name: None,
-            kind: NativeLibKind::Static { bundle: None, whole_archive: None },
+            kind: NativeLibKind::Static { bundle: None, whole_archive: None, export_symbols: None },
             verbatim: None,
         },
         NativeLib {
@@ -837,7 +837,7 @@ fn test_unstable_options_tracking_hash() {
     tracked!(no_profiler_runtime, true);
     tracked!(no_trait_vptr, true);
     tracked!(no_unique_section_names, true);
-    tracked!(offload, vec![Offload::Enable]);
+    tracked!(offload, vec![Offload::Device]);
     tracked!(on_broken_pipe, OnBrokenPipe::Kill);
     tracked!(osx_rpath_install_name, true);
     tracked!(packed_bundled_libs, true);

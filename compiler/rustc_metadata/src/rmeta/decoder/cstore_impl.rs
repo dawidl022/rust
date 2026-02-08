@@ -11,7 +11,8 @@ use rustc_middle::bug;
 use rustc_middle::metadata::{AmbigModChild, ModChild};
 use rustc_middle::middle::exported_symbols::ExportedSymbol;
 use rustc_middle::middle::stability::DeprecationEntry;
-use rustc_middle::query::{ExternProviders, LocalCrate};
+use rustc_middle::queries::ExternProviders;
+use rustc_middle::query::LocalCrate;
 use rustc_middle::ty::fast_reject::SimplifiedType;
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_middle::util::Providers;
@@ -25,7 +26,7 @@ use super::{Decodable, DecodeIterator};
 use crate::creader::{CStore, LoadedMacro};
 use crate::rmeta::AttrFlags;
 use crate::rmeta::table::IsDefault;
-use crate::{foreign_modules, native_libs};
+use crate::{eii, foreign_modules, native_libs};
 
 trait ProcessQueryValue<'tcx, T> {
     fn process_decoded(self, _tcx: TyCtxt<'tcx>, _err: impl Fn() -> !) -> T;
@@ -134,8 +135,8 @@ macro_rules! provide_one {
     ($tcx:ident, $def_id:ident, $other:ident, $cdata:ident, $name:ident => $compute:block) => {
         fn $name<'tcx>(
             $tcx: TyCtxt<'tcx>,
-            def_id_arg: rustc_middle::query::queries::$name::Key<'tcx>,
-        ) -> rustc_middle::query::queries::$name::ProvidedValue<'tcx> {
+            def_id_arg: rustc_middle::queries::$name::Key<'tcx>,
+        ) -> rustc_middle::queries::$name::ProvidedValue<'tcx> {
             let _prof_timer =
                 $tcx.prof.generic_activity(concat!("metadata_decode_entry_", stringify!($name)));
 
@@ -323,16 +324,28 @@ provide! { tcx, def_id, other, cdata,
     inherent_impls => { cdata.get_inherent_implementations_for_type(tcx, def_id.index) }
     attrs_for_def => { tcx.arena.alloc_from_iter(cdata.get_item_attrs(tcx, def_id.index)) }
     is_mir_available => { cdata.is_item_mir_available(tcx, def_id.index) }
-    is_ctfe_mir_available => { cdata.is_ctfe_mir_available(tcx, def_id.index) }
     cross_crate_inlinable => { table_direct }
 
     dylib_dependency_formats => { cdata.get_dylib_dependency_formats(tcx) }
     is_private_dep => { cdata.private_dep }
     is_panic_runtime => { cdata.root.panic_runtime }
     is_compiler_builtins => { cdata.root.compiler_builtins }
+
+    // FIXME: to be replaced with externally_implementable_items below
     has_global_allocator => { cdata.root.has_global_allocator }
+    // FIXME: to be replaced with externally_implementable_items below
     has_alloc_error_handler => { cdata.root.has_alloc_error_handler }
+    // FIXME: to be replaced with externally_implementable_items below
     has_panic_handler => { cdata.root.has_panic_handler }
+
+    externally_implementable_items => {
+        cdata.get_externally_implementable_items(tcx)
+            .map(|(decl_did, (decl, impls))| (
+                decl_did,
+                (decl, impls.into_iter().collect())
+            )).collect()
+    }
+
     is_profiler_runtime => { cdata.root.profiler_runtime }
     required_panic_strategy => { cdata.root.required_panic_strategy }
     panic_in_drop_strategy => { cdata.root.panic_in_drop_strategy }
@@ -430,6 +443,7 @@ pub(in crate::rmeta) fn provide(providers: &mut Providers) {
         },
         native_libraries: native_libs::collect,
         foreign_modules: foreign_modules::collect,
+        externally_implementable_items: eii::collect,
 
         // Returns a map from a sufficiently visible external item (i.e., an
         // external item that is visible from at least one local module) to a
@@ -545,6 +559,15 @@ pub(in crate::rmeta) fn provide(providers: &mut Providers) {
                     .filter_map(|(cnum, data)| data.used().then_some(cnum)),
             )
         },
+        duplicate_crate_names: |tcx, c: CrateNum| {
+            let name = tcx.crate_name(c);
+            tcx.arena.alloc_from_iter(
+                tcx.crates(())
+                    .into_iter()
+                    .filter(|k| tcx.crate_name(**k) == name && **k != c)
+                    .map(|c| *c),
+            )
+        },
         ..providers.queries
     };
     provide_extern(&mut providers.extern_queries);
@@ -609,15 +632,15 @@ impl CStore {
         self.get_crate_data(cnum).get_proc_macro_quoted_span(tcx, id)
     }
 
-    pub fn set_used_recursively(&mut self, tcx: TyCtxt<'_>, cnum: CrateNum) {
+    pub fn set_used_recursively(&mut self, cnum: CrateNum) {
         let cmeta = self.get_crate_data_mut(cnum);
         if !cmeta.used {
             cmeta.used = true;
-            let dependencies = mem::take(&mut cmeta.dependencies);
-            for &dep_cnum in &dependencies {
-                self.set_used_recursively(tcx, dep_cnum);
+            let cnum_map = mem::take(&mut cmeta.cnum_map);
+            for &dep_cnum in cnum_map.iter() {
+                self.set_used_recursively(dep_cnum);
             }
-            self.get_crate_data_mut(cnum).dependencies = dependencies;
+            self.get_crate_data_mut(cnum).cnum_map = cnum_map;
         }
     }
 
@@ -649,11 +672,11 @@ impl CStore {
         if cmeta.update_extern_crate_diagnostics(extern_crate) {
             // Propagate the extern crate info to dependencies if it was updated.
             let extern_crate = ExternCrate { dependency_of: cnum, ..extern_crate };
-            let dependencies = mem::take(&mut cmeta.dependencies);
-            for &dep_cnum in &dependencies {
+            let cnum_map = mem::take(&mut cmeta.cnum_map);
+            for &dep_cnum in cnum_map.iter() {
                 self.update_transitive_extern_crate_diagnostics(dep_cnum, extern_crate);
             }
-            self.get_crate_data_mut(cnum).dependencies = dependencies;
+            self.get_crate_data_mut(cnum).cnum_map = cnum_map;
         }
     }
 }

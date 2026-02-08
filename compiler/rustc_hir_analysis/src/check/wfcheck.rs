@@ -2,11 +2,13 @@ use std::cell::LazyCell;
 use std::ops::{ControlFlow, Deref};
 
 use hir::intravisit::{self, Visitor};
-use rustc_abi::ExternAbi;
+use rustc_abi::{ExternAbi, ScalableElt};
 use rustc_data_structures::fx::{FxHashSet, FxIndexMap, FxIndexSet};
 use rustc_errors::codes::*;
-use rustc_errors::{Applicability, ErrorGuaranteed, pluralize, struct_span_code_err};
-use rustc_hir::attrs::AttributeKind;
+use rustc_errors::{
+    Applicability, ErrorGuaranteed, inline_fluent, pluralize, struct_span_code_err,
+};
+use rustc_hir::attrs::{AttributeKind, EiiDecl, EiiImpl, EiiImplResolution};
 use rustc_hir::def::{DefKind, Res};
 use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_hir::lang_items::LangItem;
@@ -39,10 +41,11 @@ use rustc_trait_selection::traits::{
 use tracing::{debug, instrument};
 use {rustc_ast as ast, rustc_hir as hir};
 
+use super::compare_eii::compare_eii_function_types;
 use crate::autoderef::Autoderef;
 use crate::constrained_generic_params::{Parameter, identify_constrained_generic_params};
+use crate::errors;
 use crate::errors::InvalidReceiverTyHint;
-use crate::{errors, fluent_generated as fluent};
 
 pub(super) struct WfCheckingCtxt<'a, 'tcx> {
     pub(super) ocx: ObligationCtxt<'a, 'tcx, FulfillmentError<'tcx>>,
@@ -326,7 +329,7 @@ pub(crate) fn check_trait_item<'tcx>(
 
     let mut res = Ok(());
 
-    if matches!(tcx.def_kind(def_id), DefKind::AssocFn) {
+    if tcx.def_kind(def_id) == DefKind::AssocFn {
         for &assoc_ty_def_id in
             tcx.associated_types_for_impl_traits_in_associated_fn(def_id.to_def_id())
         {
@@ -952,7 +955,7 @@ pub(crate) fn check_associated_item(
                 wfcx.register_wf_obligation(span, loc, ty.into());
 
                 let has_value = item.defaultness(tcx).has_value();
-                if find_attr!(tcx.get_all_attrs(def_id), AttributeKind::TypeConst(_)) {
+                if tcx.is_type_const(def_id.into()) {
                     check_type_const(wfcx, def_id, ty, has_value)?;
                 }
 
@@ -1037,7 +1040,21 @@ fn check_type_defn<'tcx>(
                     hir_ty.span,
                     Some(WellFormedLoc::Ty(field_id)),
                     ty.into(),
-                )
+                );
+
+                if matches!(ty.kind(), ty::Adt(def, _) if def.repr().scalable())
+                    && !matches!(adt_def.repr().scalable, Some(ScalableElt::Container))
+                {
+                    // Scalable vectors can only be fields of structs if the type has a
+                    // `rustc_scalable_vector` attribute w/out specifying an element count
+                    tcx.dcx().span_err(
+                        hir_ty.span,
+                        format!(
+                            "scalable vectors cannot be fields of a {}",
+                            adt_def.variant_descr()
+                        ),
+                    );
+                }
             }
 
             // For DST, or when drop needs to copy things around, all
@@ -1170,10 +1187,40 @@ fn check_item_fn(
     decl: &hir::FnDecl<'_>,
 ) -> Result<(), ErrorGuaranteed> {
     enter_wf_checking_ctxt(tcx, def_id, |wfcx| {
+        check_eiis(tcx, def_id);
+
         let sig = tcx.fn_sig(def_id).instantiate_identity();
         check_fn_or_method(wfcx, sig, decl, def_id);
         Ok(())
     })
+}
+
+fn check_eiis(tcx: TyCtxt<'_>, def_id: LocalDefId) {
+    // does the function have an EiiImpl attribute? that contains the defid of a *macro*
+    // that was used to mark the implementation. This is a two step process.
+    for EiiImpl { resolution, span, .. } in
+        find_attr!(tcx.get_all_attrs(def_id), AttributeKind::EiiImpls(impls) => impls)
+            .into_iter()
+            .flatten()
+    {
+        let (foreign_item, name) = match resolution {
+            EiiImplResolution::Macro(def_id) => {
+                // we expect this macro to have the `EiiMacroFor` attribute, that points to a function
+                // signature that we'd like to compare the function we're currently checking with
+                if let Some(foreign_item) = find_attr!(tcx.get_all_attrs(*def_id), AttributeKind::EiiDeclaration(EiiDecl {foreign_item: t, ..}) => *t)
+                {
+                    (foreign_item, tcx.item_name(*def_id))
+                } else {
+                    tcx.dcx().span_delayed_bug(*span, "resolved to something that's not an EII");
+                    continue;
+                }
+            }
+            EiiImplResolution::Known(decl) => (decl.foreign_item, decl.name.name),
+            EiiImplResolution::Error(_eg) => continue,
+        };
+
+        let _ = compare_eii_function_types(tcx, def_id, foreign_item, name, *span);
+    }
 }
 
 #[instrument(level = "debug", skip(tcx))]
@@ -1695,7 +1742,7 @@ fn check_method_receiver<'tcx>(
                             the `arbitrary_self_types` feature",
                     ),
                 )
-                .with_help(fluent::hir_analysis_invalid_receiver_ty_help)
+                .with_help(inline_fluent!("consider changing to `self`, `&self`, `&mut self`, or a type implementing `Receiver` such as `self: Box<Self>`, `self: Rc<Self>`, or `self: Arc<Self>`"))
                 .emit()
             }
             None | Some(ArbitrarySelfTypesLevel::Basic)
@@ -1719,7 +1766,7 @@ fn check_method_receiver<'tcx>(
                             the `arbitrary_self_types_pointers` feature",
                     ),
                 )
-                .with_help(fluent::hir_analysis_invalid_receiver_ty_help)
+                .with_help(inline_fluent!("consider changing to `self`, `&self`, `&mut self`, or a type implementing `Receiver` such as `self: Box<Self>`, `self: Rc<Self>`, or `self: Arc<Self>`"))
                 .emit()
             }
             _ =>
@@ -2115,7 +2162,12 @@ fn report_bivariance<'tcx>(
         const_param_help,
     });
     diag.code(E0392);
-    diag.emit()
+    if item.kind.recovered() {
+        // Silence potentially redundant error, as the item had a parse error.
+        diag.delay_as_bug()
+    } else {
+        diag.emit()
+    }
 }
 
 /// Detects cases where an ADT/LTA is trivially cyclical -- we want to detect this so
@@ -2392,8 +2444,8 @@ fn lint_redundant_lifetimes<'tcx>(
 }
 
 #[derive(LintDiagnostic)]
-#[diag(hir_analysis_redundant_lifetime_args)]
-#[note]
+#[diag("unnecessary lifetime parameter `{$victim}`")]
+#[note("you can use the `{$candidate}` lifetime directly, in place of `{$victim}`")]
 struct RedundantLifetimeArgsLint<'tcx> {
     /// The lifetime we have found to be redundant.
     victim: ty::Region<'tcx>,

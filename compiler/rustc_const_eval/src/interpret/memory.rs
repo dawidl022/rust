@@ -6,7 +6,6 @@
 //! integer. It is crucial that these operations call `check_align` *before*
 //! short-circuiting the empty case!
 
-use std::assert_matches::assert_matches;
 use std::borrow::{Borrow, Cow};
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -14,7 +13,9 @@ use std::{fmt, ptr};
 
 use rustc_abi::{Align, HasDataLayout, Size};
 use rustc_ast::Mutability;
+use rustc_data_structures::assert_matches;
 use rustc_data_structures::fx::{FxHashSet, FxIndexMap};
+use rustc_errors::inline_fluent;
 use rustc_middle::mir::display_allocation;
 use rustc_middle::ty::{self, Instance, Ty, TyCtxt};
 use rustc_middle::{bug, throw_ub_format};
@@ -27,7 +28,6 @@ use super::{
     err_ub_custom, interp_ok, throw_ub, throw_ub_custom, throw_unsup, throw_unsup_format,
 };
 use crate::const_eval::ConstEvalErrKind;
-use crate::fluent_generated as fluent;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum MemoryKind<T> {
@@ -291,7 +291,13 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
         let (alloc_id, offset, _prov) = self.ptr_get_alloc_id(ptr, 0)?;
         if offset.bytes() != 0 {
             throw_ub_custom!(
-                fluent::const_eval_realloc_or_alloc_with_offset,
+                inline_fluent!(
+                    "{$kind ->
+    [dealloc] deallocating
+    [realloc] reallocating
+    *[other] {\"\"}
+} {$ptr} which does not point to the beginning of an object"
+                ),
                 ptr = format!("{ptr:?}"),
                 kind = "realloc"
             );
@@ -327,7 +333,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
             return Err(ConstEvalErrKind::ConstMakeGlobalWithOffset(ptr)).into();
         }
 
-        if matches!(self.tcx.try_get_global_alloc(alloc_id), Some(_)) {
+        if self.tcx.try_get_global_alloc(alloc_id).is_some() {
             // This points to something outside the current interpreter.
             return Err(ConstEvalErrKind::ConstMakeGlobalPtrIsNonHeap(ptr)).into();
         }
@@ -371,7 +377,13 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
 
         if offset.bytes() != 0 {
             throw_ub_custom!(
-                fluent::const_eval_realloc_or_alloc_with_offset,
+                inline_fluent!(
+                    "{$kind ->
+    [dealloc] deallocating
+    [realloc] reallocating
+    *[other] {\"\"}
+} {$ptr} which does not point to the beginning of an object"
+                ),
                 ptr = format!("{ptr:?}"),
                 kind = "dealloc",
             );
@@ -382,28 +394,56 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
             return Err(match self.tcx.try_get_global_alloc(alloc_id) {
                 Some(GlobalAlloc::Function { .. }) => {
                     err_ub_custom!(
-                        fluent::const_eval_invalid_dealloc,
+                        inline_fluent!(
+                            "deallocating {$alloc_id}, which is {$kind ->
+    [fn] a function
+    [vtable] a vtable
+    [static_mem] static memory
+    *[other] {\"\"}
+}"
+                        ),
                         alloc_id = alloc_id,
                         kind = "fn",
                     )
                 }
                 Some(GlobalAlloc::VTable(..)) => {
                     err_ub_custom!(
-                        fluent::const_eval_invalid_dealloc,
+                        inline_fluent!(
+                            "deallocating {$alloc_id}, which is {$kind ->
+    [fn] a function
+    [vtable] a vtable
+    [static_mem] static memory
+    *[other] {\"\"}
+}"
+                        ),
                         alloc_id = alloc_id,
                         kind = "vtable",
                     )
                 }
                 Some(GlobalAlloc::TypeId { .. }) => {
                     err_ub_custom!(
-                        fluent::const_eval_invalid_dealloc,
+                        inline_fluent!(
+                            "deallocating {$alloc_id}, which is {$kind ->
+    [fn] a function
+    [vtable] a vtable
+    [static_mem] static memory
+    *[other] {\"\"}
+}"
+                        ),
                         alloc_id = alloc_id,
                         kind = "typeid",
                     )
                 }
                 Some(GlobalAlloc::Static(..) | GlobalAlloc::Memory(..)) => {
                     err_ub_custom!(
-                        fluent::const_eval_invalid_dealloc,
+                        inline_fluent!(
+                            "deallocating {$alloc_id}, which is {$kind ->
+    [fn] a function
+    [vtable] a vtable
+    [static_mem] static memory
+    *[other] {\"\"}
+}"
+                        ),
                         alloc_id = alloc_id,
                         kind = "static_mem"
                     )
@@ -414,11 +454,16 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
         };
 
         if alloc.mutability.is_not() {
-            throw_ub_custom!(fluent::const_eval_dealloc_immutable, alloc = alloc_id,);
+            throw_ub_custom!(
+                inline_fluent!("deallocating immutable allocation {$alloc}"),
+                alloc = alloc_id,
+            );
         }
         if alloc_kind != kind {
             throw_ub_custom!(
-                fluent::const_eval_dealloc_kind_mismatch,
+                inline_fluent!(
+                    "deallocating {$alloc}, which is {$alloc_kind} memory, using {$kind} deallocation operation"
+                ),
                 alloc = alloc_id,
                 alloc_kind = format!("{alloc_kind}"),
                 kind = format!("{kind}"),
@@ -427,7 +472,9 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
         if let Some((size, align)) = old_size_and_align {
             if size != alloc.size() || align != alloc.align {
                 throw_ub_custom!(
-                    fluent::const_eval_dealloc_incorrect_layout,
+                    inline_fluent!(
+                        "incorrect layout on deallocation: {$alloc} has size {$size} and alignment {$align}, but gave size {$size_found} and alignment {$align_found}"
+                    ),
                     alloc = alloc_id,
                     size = alloc.size().bytes(),
                     align = alloc.align.bytes(),
@@ -981,7 +1028,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
         msg: CheckInAllocMsg,
     ) -> InterpResult<'tcx, (Size, Align)> {
         let info = self.get_alloc_info(id);
-        if matches!(info.kind, AllocKind::Dead) {
+        if info.kind == AllocKind::Dead {
             throw_ub!(PointerUseAfterFree(id, msg))
         }
         interp_ok((info.size, info.align))
@@ -1072,7 +1119,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
             // Recurse, if there is data here.
             // Do this *before* invoking the callback, as the callback might mutate the
             // allocation and e.g. replace all provenance by wildcards!
-            if matches!(info.kind, AllocKind::LiveData) {
+            if info.kind == AllocKind::LiveData {
                 let alloc = self.get_alloc_raw(id)?;
                 for prov in alloc.provenance().provenances() {
                     if let Some(id) = prov.get_alloc_id() {
@@ -1546,7 +1593,9 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                     if (src_offset <= dest_offset && src_offset + size > dest_offset)
                         || (dest_offset <= src_offset && dest_offset + size > src_offset)
                     {
-                        throw_ub_custom!(fluent::const_eval_copy_nonoverlapping_overlapping);
+                        throw_ub_custom!(inline_fluent!(
+                            "`copy_nonoverlapping` called on overlapping ranges"
+                        ));
                     }
                 }
             }
@@ -1605,7 +1654,7 @@ impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
                 match self.ptr_try_get_alloc_id(ptr, 0) {
                     Ok((alloc_id, offset, _)) => {
                         let info = self.get_alloc_info(alloc_id);
-                        if matches!(info.kind, AllocKind::TypeId) {
+                        if info.kind == AllocKind::TypeId {
                             // We *could* actually precisely answer this question since here,
                             // the offset *is* the integer value. But the entire point of making
                             // this a pointer is not to leak the integer value, so we say everything

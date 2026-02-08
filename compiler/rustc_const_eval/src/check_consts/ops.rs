@@ -2,7 +2,7 @@
 
 use hir::{ConstContext, LangItem};
 use rustc_errors::codes::*;
-use rustc_errors::{Applicability, Diag, MultiSpan};
+use rustc_errors::{Applicability, Diag, MultiSpan, inline_fluent};
 use rustc_hir as hir;
 use rustc_hir::def_id::DefId;
 use rustc_infer::infer::TyCtxtInferExt;
@@ -23,7 +23,7 @@ use rustc_trait_selection::traits::SelectionContext;
 use tracing::debug;
 
 use super::ConstCx;
-use crate::{errors, fluent_generated};
+use crate::errors;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -125,9 +125,6 @@ pub(crate) struct FnCallNonConst<'tcx> {
 }
 
 impl<'tcx> NonConstOp<'tcx> for FnCallNonConst<'tcx> {
-    // FIXME: make this translatable
-    #[allow(rustc::diagnostic_outside_of_impl)]
-    #[allow(rustc::untranslatable_diagnostic)]
     fn build_error(&self, ccx: &ConstCx<'_, 'tcx>, _: Span) -> Diag<'tcx> {
         let tcx = ccx.tcx;
         let caller = ccx.def_id();
@@ -184,7 +181,9 @@ impl<'tcx> NonConstOp<'tcx> for FnCallNonConst<'tcx> {
         );
 
         if let ConstContext::Static(_) = ccx.const_kind() {
-            err.note(fluent_generated::const_eval_lazy_lock);
+            err.note(inline_fluent!(
+                "consider wrapping this expression in `std::sync::LazyLock::new(|| ...)`"
+            ));
         }
 
         err

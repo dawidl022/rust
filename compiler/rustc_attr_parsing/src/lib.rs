@@ -99,6 +99,7 @@ mod interface;
 /// like lists or name-value pairs.
 pub mod parser;
 
+mod early_parsed;
 mod safety;
 mod session_diagnostics;
 mod target_checking;
@@ -112,5 +113,3 @@ pub use attributes::util::{is_builtin_attr, parse_version};
 pub use context::{Early, Late, OmitDoc, ShouldEmit};
 pub use interface::AttributeParser;
 pub use session_diagnostics::ParsedDescription;
-
-rustc_fluent_macro::fluent_messages! { "../messages.ftl" }

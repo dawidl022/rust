@@ -1,4 +1,7 @@
-use std::assert_matches::debug_assert_matches;
+#[cfg(bootstrap)]
+pub use std::assert_matches::debug_assert_matches;
+#[cfg(not(bootstrap))]
+pub use std::debug_assert_matches;
 use std::fmt::{self, Display, Write as _};
 use std::sync::LazyLock as Lazy;
 use std::{ascii, mem};
@@ -102,7 +105,7 @@ pub(crate) fn clean_middle_generic_args<'tcx>(
     // to align the arguments and parameters for the iteration below and to enable us to correctly
     // instantiate the generic parameter default later.
     let generics = cx.tcx.generics_of(owner);
-    let args = if !has_self && generics.parent.is_none() && generics.has_self {
+    let args = if !has_self && generics.has_own_self() {
         has_self = true;
         [cx.tcx.types.trait_object_dummy_self.into()]
             .into_iter()
@@ -357,7 +360,7 @@ pub(crate) fn print_const(cx: &DocContext<'_>, n: ty::Const<'_>) -> String {
         }
         // array lengths are obviously usize
         ty::ConstKind::Value(cv) if *cv.ty.kind() == ty::Uint(ty::UintTy::Usize) => {
-            cv.valtree.unwrap_leaf().to_string()
+            cv.to_leaf().to_string()
         }
         _ => n.to_string(),
     }

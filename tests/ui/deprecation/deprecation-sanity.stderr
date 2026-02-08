@@ -1,8 +1,10 @@
-error[E0541]: unknown meta item 'reason'
-  --> $DIR/deprecation-sanity.rs:6:43
+error[E0539]: malformed `deprecated` attribute input
+  --> $DIR/deprecation-sanity.rs:6:5
    |
 LL |     #[deprecated(since = "a", note = "a", reason)]
-   |                                           ^^^^^^ expected one of `since`, `note`
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^------^^
+   |                                           |
+   |                                           valid arguments are `since` or `note`
 
 error[E0539]: malformed `deprecated` attribute input
   --> $DIR/deprecation-sanity.rs:9:5
@@ -81,10 +83,10 @@ LL | #[deprecated = "hello"]
    | ^^^^^^^^^^^^^^^^^^^^^^^
    |
    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
-   = help: `#[deprecated]` can be applied to associated consts, associated types, constants, crates, data types, enum variants, foreign statics, functions, inherent impl blocks, macro defs, modules, statics, struct fields, traits, type aliases, unions, and use statements
+   = help: `#[deprecated]` can be applied to associated consts, associated types, constants, crates, data types, enum variants, foreign statics, functions, inherent impl blocks, macro defs, modules, statics, struct fields, traits, type aliases, and use statements
    = note: `#[deny(useless_deprecated)]` on by default
 
 error: aborting due to 10 previous errors
 
-Some errors have detailed explanations: E0538, E0539, E0541, E0565.
+Some errors have detailed explanations: E0538, E0539, E0565.
 For more information about an error, try `rustc --explain E0538`.

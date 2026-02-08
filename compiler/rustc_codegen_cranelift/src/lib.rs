@@ -1,6 +1,4 @@
 // tidy-alphabetical-start
-#![allow(rustc::diagnostic_outside_of_impl)]
-#![allow(rustc::untranslatable_diagnostic)]
 // Note: please avoid adding other feature gates where possible
 #![feature(rustc_private)]
 // Only used to define intrinsics in `compiler_builtins.rs`.
@@ -127,11 +125,6 @@ pub struct CraneliftCodegenBackend {
 }
 
 impl CodegenBackend for CraneliftCodegenBackend {
-    fn locale_resource(&self) -> &'static str {
-        // FIXME(rust-lang/rust#100717) - cranelift codegen backend is not yet translated
-        ""
-    }
-
     fn name(&self) -> &'static str {
         "cranelift"
     }

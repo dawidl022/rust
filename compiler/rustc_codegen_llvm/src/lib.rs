@@ -5,7 +5,6 @@
 //! This API is completely unstable and subject to change.
 
 // tidy-alphabetical-start
-#![cfg_attr(bootstrap, feature(slice_as_array))]
 #![feature(assert_matches)]
 #![feature(extern_types)]
 #![feature(file_buffered)]
@@ -13,6 +12,7 @@
 #![feature(impl_trait_in_assoc_type)]
 #![feature(iter_intersperse)]
 #![feature(macro_derive)]
+#![feature(once_cell_try)]
 #![feature(trim_prefix_suffix)]
 #![feature(try_blocks)]
 // tidy-alphabetical-end
@@ -30,19 +30,20 @@ use llvm_util::target_config;
 use rustc_ast::expand::allocator::AllocatorMethod;
 use rustc_codegen_ssa::back::lto::{SerializedModule, ThinModule};
 use rustc_codegen_ssa::back::write::{
-    CodegenContext, FatLtoInput, ModuleConfig, TargetMachineFactoryConfig, TargetMachineFactoryFn,
+    CodegenContext, FatLtoInput, ModuleConfig, SharedEmitter, TargetMachineFactoryConfig,
+    TargetMachineFactoryFn,
 };
 use rustc_codegen_ssa::traits::*;
 use rustc_codegen_ssa::{CodegenResults, CompiledModule, ModuleCodegen, TargetConfig};
 use rustc_data_structures::fx::FxIndexMap;
-use rustc_errors::DiagCtxtHandle;
+use rustc_errors::{DiagCtxt, DiagCtxtHandle};
 use rustc_metadata::EncodedMetadata;
 use rustc_middle::dep_graph::{WorkProduct, WorkProductId};
 use rustc_middle::ty::TyCtxt;
 use rustc_middle::util::Providers;
 use rustc_session::Session;
 use rustc_session::config::{OptLevel, OutputFilenames, PrintKind, PrintRequest};
-use rustc_span::Symbol;
+use rustc_span::{Symbol, sym};
 use rustc_target::spec::{RelocModel, TlsModel};
 
 use crate::llvm::ToLlvmBool;
@@ -72,8 +73,6 @@ mod type_of;
 mod typetree;
 mod va_arg;
 mod value;
-
-rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
 
 pub(crate) use macros::TryFromU32;
 
@@ -166,14 +165,20 @@ impl WriteBackendMethods for LlvmCodegenBackend {
     }
     fn run_and_optimize_fat_lto(
         cgcx: &CodegenContext<Self>,
+        shared_emitter: &SharedEmitter,
         exported_symbols_for_lto: &[String],
         each_linked_rlib_for_lto: &[PathBuf],
         modules: Vec<FatLtoInput<Self>>,
     ) -> ModuleCodegen<Self::Module> {
-        let mut module =
-            back::lto::run_fat(cgcx, exported_symbols_for_lto, each_linked_rlib_for_lto, modules);
+        let mut module = back::lto::run_fat(
+            cgcx,
+            shared_emitter,
+            exported_symbols_for_lto,
+            each_linked_rlib_for_lto,
+            modules,
+        );
 
-        let dcx = cgcx.create_dcx();
+        let dcx = DiagCtxt::new(Box::new(shared_emitter.clone()));
         let dcx = dcx.handle();
         back::lto::run_pass_manager(cgcx, dcx, &mut module, false);
 
@@ -181,6 +186,7 @@ impl WriteBackendMethods for LlvmCodegenBackend {
     }
     fn run_thin_lto(
         cgcx: &CodegenContext<Self>,
+        dcx: DiagCtxtHandle<'_>,
         exported_symbols_for_lto: &[String],
         each_linked_rlib_for_lto: &[PathBuf],
         modules: Vec<(String, Self::ThinBuffer)>,
@@ -188,6 +194,7 @@ impl WriteBackendMethods for LlvmCodegenBackend {
     ) -> (Vec<ThinModule<Self>>, Vec<WorkProduct>) {
         back::lto::run_thin(
             cgcx,
+            dcx,
             exported_symbols_for_lto,
             each_linked_rlib_for_lto,
             modules,
@@ -196,24 +203,26 @@ impl WriteBackendMethods for LlvmCodegenBackend {
     }
     fn optimize(
         cgcx: &CodegenContext<Self>,
-        dcx: DiagCtxtHandle<'_>,
+        shared_emitter: &SharedEmitter,
         module: &mut ModuleCodegen<Self::Module>,
         config: &ModuleConfig,
     ) {
-        back::write::optimize(cgcx, dcx, module, config)
+        back::write::optimize(cgcx, shared_emitter, module, config)
     }
     fn optimize_thin(
         cgcx: &CodegenContext<Self>,
+        shared_emitter: &SharedEmitter,
         thin: ThinModule<Self>,
     ) -> ModuleCodegen<Self::Module> {
-        back::lto::optimize_thin_module(thin, cgcx)
+        back::lto::optimize_thin_module(cgcx, shared_emitter, thin)
     }
     fn codegen(
         cgcx: &CodegenContext<Self>,
+        shared_emitter: &SharedEmitter,
         module: ModuleCodegen<Self::Module>,
         config: &ModuleConfig,
     ) -> CompiledModule {
-        back::write::codegen(cgcx, module, config)
+        back::write::codegen(cgcx, shared_emitter, module, config)
     }
     fn prepare_thin(module: ModuleCodegen<Self::Module>) -> (String, Self::ThinBuffer) {
         back::lto::prepare_thin(module)
@@ -230,20 +239,37 @@ impl LlvmCodegenBackend {
 }
 
 impl CodegenBackend for LlvmCodegenBackend {
-    fn locale_resource(&self) -> &'static str {
-        crate::DEFAULT_LOCALE_RESOURCE
-    }
-
     fn name(&self) -> &'static str {
         "llvm"
     }
 
     fn init(&self, sess: &Session) {
         llvm_util::init(sess); // Make sure llvm is inited
+
+        // autodiff is based on Enzyme, a library which we might not have available, when it was
+        // neither build, nor downloaded via rustup. If autodiff is used, but not available we emit
+        // an early error here and abort compilation.
+        {
+            use rustc_session::config::AutoDiff;
+
+            use crate::back::lto::enable_autodiff_settings;
+            if sess.opts.unstable_opts.autodiff.contains(&AutoDiff::Enable) {
+                match llvm::EnzymeWrapper::get_or_init(&sess.opts.sysroot) {
+                    Ok(_) => {}
+                    Err(llvm::EnzymeLibraryError::NotFound { err }) => {
+                        sess.dcx().emit_fatal(crate::errors::AutoDiffComponentMissing { err });
+                    }
+                    Err(llvm::EnzymeLibraryError::LoadFailed { err }) => {
+                        sess.dcx().emit_fatal(crate::errors::AutoDiffComponentUnavailable { err });
+                    }
+                }
+                enable_autodiff_settings(&sess.opts.unstable_opts.autodiff);
+            }
+        }
     }
 
     fn provide(&self, providers: &mut Providers) {
-        providers.global_backend_features =
+        providers.queries.global_backend_features =
             |tcx, ()| llvm_util::global_llvm_features(tcx.sess, false)
     }
 
@@ -316,6 +342,10 @@ impl CodegenBackend for LlvmCodegenBackend {
 
     fn target_config(&self, sess: &Session) -> TargetConfig {
         target_config(sess)
+    }
+
+    fn replaced_intrinsics(&self) -> Vec<Symbol> {
+        vec![sym::unchecked_funnel_shl, sym::unchecked_funnel_shr, sym::carrying_mul_add]
     }
 
     fn codegen_crate<'tcx>(&self, tcx: TyCtxt<'tcx>) -> Box<dyn Any> {

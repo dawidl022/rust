@@ -1,5 +1,6 @@
 use rustc_ast::ast::{AttrStyle, LitKind, MetaItemLit};
 use rustc_feature::template;
+use rustc_hir::Target;
 use rustc_hir::attrs::{
     AttributeKind, CfgEntry, CfgHideShow, CfgInfo, DocAttribute, DocInline, HideOrShow,
 };
@@ -12,8 +13,8 @@ use super::{AcceptMapping, AttributeParser};
 use crate::context::{AcceptContext, FinalizeContext, Stage};
 use crate::parser::{ArgParser, MetaItemOrLitParser, MetaItemParser, OwnedPathParser};
 use crate::session_diagnostics::{
-    DocAliasBadChar, DocAliasEmpty, DocAliasMalformed, DocAliasStartEnd, DocAttributeNotAttribute,
-    DocKeywordNotKeyword,
+    DocAliasBadChar, DocAliasEmpty, DocAliasMalformed, DocAliasStartEnd, DocAttrNotCrateLevel,
+    DocAttributeNotAttribute, DocKeywordNotKeyword,
 };
 
 fn check_keyword<S: Stage>(cx: &mut AcceptContext<'_, '_, S>, keyword: Symbol, span: Span) -> bool {
@@ -43,36 +44,105 @@ fn check_attribute<S: Stage>(
     false
 }
 
-fn parse_keyword_and_attribute<S, F>(
+/// Checks that an attribute is *not* used at the crate level. Returns `true` if valid.
+fn check_attr_not_crate_level<S: Stage>(
+    cx: &mut AcceptContext<'_, '_, S>,
+    span: Span,
+    attr_name: Symbol,
+) -> bool {
+    if cx.shared.target == Target::Crate {
+        cx.emit_err(DocAttrNotCrateLevel { span, attr_name });
+        return false;
+    }
+    true
+}
+
+/// Checks that an attribute is used at the crate level. Returns `true` if valid.
+fn check_attr_crate_level<S: Stage>(cx: &mut AcceptContext<'_, '_, S>, span: Span) -> bool {
+    if cx.shared.target != Target::Crate {
+        cx.emit_lint(
+            rustc_session::lint::builtin::INVALID_DOC_ATTRIBUTES,
+            AttributeLintKind::AttrCrateLevelOnly,
+            span,
+        );
+        return false;
+    }
+    true
+}
+
+// FIXME: To be removed once merged and replace with `cx.expected_name_value(span, _name)`.
+fn expected_name_value<S: Stage>(
+    cx: &mut AcceptContext<'_, '_, S>,
+    span: Span,
+    _name: Option<Symbol>,
+) {
+    cx.emit_lint(
+        rustc_session::lint::builtin::INVALID_DOC_ATTRIBUTES,
+        AttributeLintKind::ExpectedNameValue,
+        span,
+    );
+}
+
+// FIXME: remove this method once merged and use `cx.expected_no_args(span)` instead.
+fn expected_no_args<S: Stage>(cx: &mut AcceptContext<'_, '_, S>, span: Span) {
+    cx.emit_lint(
+        rustc_session::lint::builtin::INVALID_DOC_ATTRIBUTES,
+        AttributeLintKind::ExpectedNoArgs,
+        span,
+    );
+}
+
+// FIXME: remove this method once merged and use `cx.expected_no_args(span)` instead.
+// cx.expected_string_literal(span, _actual_literal);
+fn expected_string_literal<S: Stage>(
+    cx: &mut AcceptContext<'_, '_, S>,
+    span: Span,
+    _actual_literal: Option<&MetaItemLit>,
+) {
+    cx.emit_lint(
+        rustc_session::lint::builtin::INVALID_DOC_ATTRIBUTES,
+        AttributeLintKind::MalformedDoc,
+        span,
+    );
+}
+
+fn parse_keyword_and_attribute<S: Stage>(
     cx: &mut AcceptContext<'_, '_, S>,
     path: &OwnedPathParser,
     args: &ArgParser,
     attr_value: &mut Option<(Symbol, Span)>,
-    callback: F,
-) where
-    S: Stage,
-    F: FnOnce(&mut AcceptContext<'_, '_, S>, Symbol, Span) -> bool,
-{
+    attr_name: Symbol,
+) {
     let Some(nv) = args.name_value() else {
-        cx.expected_name_value(args.span().unwrap_or(path.span()), path.word_sym());
+        expected_name_value(cx, args.span().unwrap_or(path.span()), path.word_sym());
         return;
     };
 
     let Some(value) = nv.value_as_str() else {
-        cx.expected_string_literal(nv.value_span, Some(nv.value_as_lit()));
+        expected_string_literal(cx, nv.value_span, Some(nv.value_as_lit()));
         return;
     };
 
-    if !callback(cx, value, nv.value_span) {
+    let ret = if attr_name == sym::keyword {
+        check_keyword(cx, value, nv.value_span)
+    } else {
+        check_attribute(cx, value, nv.value_span)
+    };
+    if !ret {
         return;
     }
 
+    let span = path.span();
     if attr_value.is_some() {
-        cx.duplicate_key(path.span(), path.word_sym().unwrap());
+        cx.duplicate_key(span, path.word_sym().unwrap());
         return;
     }
 
-    *attr_value = Some((value, path.span()));
+    if !check_attr_not_crate_level(cx, span, attr_name) {
+        return;
+    }
+
+    *attr_value = Some((value, span));
 }
 
 #[derive(Default, Debug)]
@@ -93,12 +163,25 @@ impl DocParser {
         match path.word_sym() {
             Some(sym::no_crate_inject) => {
                 if let Err(span) = args.no_args() {
-                    cx.expected_no_args(span);
+                    expected_no_args(cx, span);
                     return;
                 }
 
-                if self.attribute.no_crate_inject.is_some() {
-                    cx.duplicate_key(path.span(), sym::no_crate_inject);
+                if let Some(used_span) = self.attribute.no_crate_inject {
+                    let unused_span = path.span();
+                    cx.emit_lint(
+                        rustc_session::lint::builtin::INVALID_DOC_ATTRIBUTES,
+                        AttributeLintKind::UnusedDuplicate {
+                            this: unused_span,
+                            other: used_span,
+                            warning: true,
+                        },
+                        unused_span,
+                    );
+                    return;
+                }
+
+                if !check_attr_crate_level(cx, path.span()) {
                     return;
                 }
 
@@ -106,7 +189,14 @@ impl DocParser {
             }
             Some(sym::attr) => {
                 let Some(list) = args.list() else {
-                    cx.expected_list(cx.attr_span);
+                    // FIXME: remove this method once merged and uncomment the line below instead.
+                    // cx.expected_list(cx.attr_span, args);
+                    let span = cx.attr_span;
+                    cx.emit_lint(
+                        rustc_session::lint::builtin::INVALID_DOC_ATTRIBUTES,
+                        AttributeLintKind::MalformedDoc,
+                        span,
+                    );
                     return;
                 };
 
@@ -153,6 +243,9 @@ impl DocParser {
         }
         if alias_str.starts_with(' ') || alias_str.ends_with(' ') {
             cx.emit_err(DocAliasStartEnd { span, attr_str });
+            return;
+        }
+        if !check_attr_not_crate_level(cx, span, sym::alias) {
             return;
         }
 
@@ -205,7 +298,7 @@ impl DocParser {
         inline: DocInline,
     ) {
         if let Err(span) = args.no_args() {
-            cx.expected_no_args(span);
+            expected_no_args(cx, span);
             return;
         }
 
@@ -287,7 +380,14 @@ impl DocParser {
                         match sub_item.args() {
                             a @ (ArgParser::NoArgs | ArgParser::NameValue(_)) => {
                                 let Some(name) = sub_item.path().word_sym() else {
-                                    cx.expected_identifier(sub_item.path().span());
+                                    // FIXME: remove this method once merged and uncomment the line
+                                    // below instead.
+                                    // cx.expected_identifier(sub_item.path().span());
+                                    cx.emit_lint(
+                                        rustc_session::lint::builtin::INVALID_DOC_ATTRIBUTES,
+                                        AttributeLintKind::MalformedDoc,
+                                        sub_item.path().span(),
+                                    );
                                     continue;
                                 };
                                 if let Ok(CfgEntry::NameValue { name, value, .. }) =
@@ -350,7 +450,7 @@ impl DocParser {
         macro_rules! no_args {
             ($ident: ident) => {{
                 if let Err(span) = args.no_args() {
-                    cx.expected_no_args(span);
+                    expected_no_args(cx, span);
                     return;
                 }
 
@@ -366,17 +466,47 @@ impl DocParser {
                 self.attribute.$ident = Some(path.span());
             }};
         }
-        macro_rules! string_arg {
+        macro_rules! no_args_and_not_crate_level {
+            ($ident: ident) => {{
+                if let Err(span) = args.no_args() {
+                    expected_no_args(cx, span);
+                    return;
+                }
+                let span = path.span();
+                if !check_attr_not_crate_level(cx, span, sym::$ident) {
+                    return;
+                }
+                self.attribute.$ident = Some(span);
+            }};
+        }
+        macro_rules! no_args_and_crate_level {
+            ($ident: ident) => {{
+                if let Err(span) = args.no_args() {
+                    expected_no_args(cx, span);
+                    return;
+                }
+                let span = path.span();
+                if !check_attr_crate_level(cx, span) {
+                    return;
+                }
+                self.attribute.$ident = Some(span);
+            }};
+        }
+        macro_rules! string_arg_and_crate_level {
             ($ident: ident) => {{
                 let Some(nv) = args.name_value() else {
-                    cx.expected_name_value(args.span().unwrap_or(path.span()), path.word_sym());
+                    expected_name_value(cx, args.span().unwrap_or(path.span()), path.word_sym());
                     return;
                 };
 
                 let Some(s) = nv.value_as_str() else {
-                    cx.expected_string_literal(nv.value_span, Some(nv.value_as_lit()));
+                    expected_string_literal(cx, nv.value_span, Some(nv.value_as_lit()));
                     return;
                 };
+
+                if !check_attr_crate_level(cx, path.span()) {
+                    return;
+                }
 
                 // FIXME: It's errorring when the attribute is passed multiple times on the command
                 // line.
@@ -394,12 +524,14 @@ impl DocParser {
         match path.word_sym() {
             Some(sym::alias) => self.parse_alias(cx, path, args),
             Some(sym::hidden) => no_args!(hidden),
-            Some(sym::html_favicon_url) => string_arg!(html_favicon_url),
-            Some(sym::html_logo_url) => string_arg!(html_logo_url),
-            Some(sym::html_no_source) => no_args!(html_no_source),
-            Some(sym::html_playground_url) => string_arg!(html_playground_url),
-            Some(sym::html_root_url) => string_arg!(html_root_url),
-            Some(sym::issue_tracker_base_url) => string_arg!(issue_tracker_base_url),
+            Some(sym::html_favicon_url) => string_arg_and_crate_level!(html_favicon_url),
+            Some(sym::html_logo_url) => string_arg_and_crate_level!(html_logo_url),
+            Some(sym::html_no_source) => no_args_and_crate_level!(html_no_source),
+            Some(sym::html_playground_url) => string_arg_and_crate_level!(html_playground_url),
+            Some(sym::html_root_url) => string_arg_and_crate_level!(html_root_url),
+            Some(sym::issue_tracker_base_url) => {
+                string_arg_and_crate_level!(issue_tracker_base_url)
+            }
             Some(sym::inline) => self.parse_inline(cx, path, args, DocInline::Inline),
             Some(sym::no_inline) => self.parse_inline(cx, path, args, DocInline::NoInline),
             Some(sym::masked) => no_args!(masked),
@@ -410,18 +542,18 @@ impl DocParser {
                 path,
                 args,
                 &mut self.attribute.keyword,
-                check_keyword,
+                sym::keyword,
             ),
             Some(sym::attribute) => parse_keyword_and_attribute(
                 cx,
                 path,
                 args,
                 &mut self.attribute.attribute,
-                check_attribute,
+                sym::attribute,
             ),
-            Some(sym::fake_variadic) => no_args!(fake_variadic),
-            Some(sym::search_unbox) => no_args!(search_unbox),
-            Some(sym::rust_logo) => no_args!(rust_logo),
+            Some(sym::fake_variadic) => no_args_and_not_crate_level!(fake_variadic),
+            Some(sym::search_unbox) => no_args_and_not_crate_level!(search_unbox),
+            Some(sym::rust_logo) => no_args_and_crate_level!(rust_logo),
             Some(sym::auto_cfg) => self.parse_auto_cfg(cx, path, args),
             Some(sym::test) => {
                 let Some(list) = args.list() else {
@@ -439,10 +571,14 @@ impl DocParser {
                             self.parse_single_test_doc_attr_item(cx, mip);
                         }
                         MetaItemOrLitParser::Lit(lit) => {
-                            cx.unexpected_literal(lit.span);
-                        }
-                        MetaItemOrLitParser::Err(..) => {
-                            // already had an error here, move on.
+                            // FIXME: remove this method once merged and uncomment the line
+                            // below instead.
+                            // cx.unexpected_literal(lit.span);
+                            cx.emit_lint(
+                                rustc_session::lint::builtin::INVALID_DOC_ATTRIBUTES,
+                                AttributeLintKind::MalformedDoc,
+                                lit.span,
+                            );
                         }
                     }
                 }
@@ -512,7 +648,7 @@ impl DocParser {
                 let suggestions = cx.suggestions();
                 let span = cx.attr_span;
                 cx.emit_lint(
-                    rustc_session::lint::builtin::ILL_FORMED_ATTRIBUTE_INPUT,
+                    rustc_session::lint::builtin::INVALID_DOC_ATTRIBUTES,
                     AttributeLintKind::IllFormedAttributeInput { suggestions, docs: None },
                     span,
                 );
@@ -525,17 +661,14 @@ impl DocParser {
                             self.parse_single_doc_attr_item(cx, mip);
                         }
                         MetaItemOrLitParser::Lit(lit) => {
-                            cx.expected_name_value(lit.span, None);
-                        }
-                        MetaItemOrLitParser::Err(..) => {
-                            // already had an error here, move on.
+                            expected_name_value(cx, lit.span, None);
                         }
                     }
                 }
             }
             ArgParser::NameValue(nv) => {
                 if nv.value_as_str().is_none() {
-                    cx.expected_string_literal(nv.value_span, Some(nv.value_as_lit()));
+                    expected_string_literal(cx, nv.value_span, Some(nv.value_as_lit()));
                 } else {
                     unreachable!(
                         "Should have been handled at the same time as sugar-syntaxed doc comments"

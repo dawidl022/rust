@@ -127,7 +127,7 @@ mod private_slice_index {
 
     #[unstable(feature = "new_range_api", issue = "125687")]
     impl Sealed for range::Range<usize> {}
-    #[unstable(feature = "new_range_api", issue = "125687")]
+    #[stable(feature = "new_range_inclusive_api", since = "CURRENT_RUSTC_VERSION")]
     impl Sealed for range::RangeInclusive<usize> {}
     #[unstable(feature = "new_range_api", issue = "125687")]
     impl Sealed for range::RangeToInclusive<usize> {}
@@ -724,7 +724,7 @@ unsafe impl<T> const SliceIndex<[T]> for ops::RangeInclusive<usize> {
     }
 }
 
-#[unstable(feature = "new_range_api", issue = "125687")]
+#[stable(feature = "new_range_inclusive_api", since = "CURRENT_RUSTC_VERSION")]
 #[rustc_const_unstable(feature = "const_index", issue = "143775")]
 unsafe impl<T> const SliceIndex<[T]> for range::RangeInclusive<usize> {
     type Output = [T];
@@ -910,29 +910,7 @@ where
     R: [const] ops::RangeBounds<usize> + [const] Destruct,
 {
     let len = bounds.end;
-
-    let end = match range.end_bound() {
-        ops::Bound::Included(&end) if end >= len => slice_index_fail(0, end, len),
-        // Cannot overflow because `end < len` implies `end < usize::MAX`.
-        ops::Bound::Included(&end) => end + 1,
-
-        ops::Bound::Excluded(&end) if end > len => slice_index_fail(0, end, len),
-        ops::Bound::Excluded(&end) => end,
-        ops::Bound::Unbounded => len,
-    };
-
-    let start = match range.start_bound() {
-        ops::Bound::Excluded(&start) if start >= end => slice_index_fail(start, end, len),
-        // Cannot overflow because `start < end` implies `start < usize::MAX`.
-        ops::Bound::Excluded(&start) => start + 1,
-
-        ops::Bound::Included(&start) if start > end => slice_index_fail(start, end, len),
-        ops::Bound::Included(&start) => start,
-
-        ops::Bound::Unbounded => 0,
-    };
-
-    ops::Range { start, end }
+    into_slice_range(len, (range.start_bound().copied(), range.end_bound().copied()))
 }
 
 /// Performs bounds checking of a range without panicking.
@@ -972,20 +950,8 @@ where
     R: ops::RangeBounds<usize>,
 {
     let len = bounds.end;
-
-    let start = match range.start_bound() {
-        ops::Bound::Included(&start) => start,
-        ops::Bound::Excluded(start) => start.checked_add(1)?,
-        ops::Bound::Unbounded => 0,
-    };
-
-    let end = match range.end_bound() {
-        ops::Bound::Included(end) => end.checked_add(1)?,
-        ops::Bound::Excluded(&end) => end,
-        ops::Bound::Unbounded => len,
-    };
-
-    if start > end || end > len { None } else { Some(ops::Range { start, end }) }
+    let r = into_range(len, (range.start_bound().copied(), range.end_bound().copied()))?;
+    if r.start > r.end || r.end > len { None } else { Some(r) }
 }
 
 /// Converts a pair of `ops::Bound`s into `ops::Range` without performing any
@@ -1011,6 +977,7 @@ pub(crate) const fn into_range_unchecked(
 /// Converts pair of `ops::Bound`s into `ops::Range`.
 /// Returns `None` on overflowing indices.
 #[rustc_const_unstable(feature = "const_range", issue = "none")]
+#[inline]
 pub(crate) const fn into_range(
     len: usize,
     (start, end): (ops::Bound<usize>, ops::Bound<usize>),
@@ -1036,7 +1003,8 @@ pub(crate) const fn into_range(
 
 /// Converts pair of `ops::Bound`s into `ops::Range`.
 /// Panics on overflowing indices.
-pub(crate) fn into_slice_range(
+#[inline]
+pub(crate) const fn into_slice_range(
     len: usize,
     (start, end): (ops::Bound<usize>, ops::Bound<usize>),
 ) -> ops::Range<usize> {

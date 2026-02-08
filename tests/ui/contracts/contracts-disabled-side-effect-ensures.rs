@@ -5,7 +5,7 @@ extern crate core;
 use core::contracts::ensures;
 
 #[ensures(*x = 0; |_ret| true)]
-//~^ ERROR: the trait bound `&mut &mut u32: std::marker::Copy` is not satisfied
+//~^ ERROR: the trait bound `&mut &mut u32: Copy` is not satisfied
 fn buggy_add(x: &mut u32, y: u32) {
     *x = *x + y;
 }

@@ -57,11 +57,10 @@ impl<S: Stage> CombineAttributeParser<S> for AllowConstFnUnstableParser {
     const PATH: &[Symbol] = &[sym::rustc_allow_const_fn_unstable];
     type Item = Symbol;
     const CONVERT: ConvertFn<Self::Item> =
-        |items, first_span| AttributeKind::AllowConstFnUnstable(items, first_span);
+        |items, first_span| AttributeKind::RustcAllowConstFnUnstable(items, first_span);
     const ALLOWED_TARGETS: AllowedTargets = AllowedTargets::AllowList(&[
         Allow(Target::Fn),
         Allow(Target::Method(MethodKind::Inherent)),
-        Allow(Target::Method(MethodKind::Trait { body: false })),
         Allow(Target::Method(MethodKind::Trait { body: true })),
         Allow(Target::Method(MethodKind::TraitImpl)),
     ]);
