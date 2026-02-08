@@ -226,44 +226,11 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             rustc_hir::lang_items::LangItem::OptionSome,
             &*arena_vec![self; *postcond_checker],
         ));
-        // For error diagnostics, span is set to decls + precondition, because
-        // those will determine the well-typedness of the __ensures_builder
-        // closure. postcond_checker is already type-checked as part of the
-        // call to build_check_ensures.
-        let span =
-            span_of_stmts(stmts, stmts.last().map(|s| s.span).unwrap_or(postcond_checker.span));
-        let span = self.mark_span_with_reason(
-            rustc_span::DesugaringKind::Contract,
-            span,
-            Some(Arc::clone(&self.allow_contracts)),
-        );
+        let span = self.contract_check_with_postcond_span(stmts, postcond_checker);
 
-        let then_block_stmts = self.block_all(span, stmts, Some(postcond_checker));
-
-        let then_block_stmts = self.expr_block(then_block_stmts);
-        let then_block_closure = self.expr_closure(span, then_block_stmts);
-        let then_block_closure = self.arena.alloc(then_block_closure);
-
-        let (builder_ident, builder_hir_id, builder_decl) =
-            self.bind_expression(then_block_closure, span, "__ensures_builder");
-        let builder_expr = self.expr_ident(span, builder_ident, builder_hir_id);
-
-        let build_postcond_call = self.expr_call_lang_item_fn(
-            span,
-            rustc_hir::LangItem::ContractCheckRequiresAndBuildEnsures,
-            &*arena_vec![self; *builder_expr],
-        );
-        let then_block_stmts =
-            self.block_all(span, arena_vec![self; builder_decl], Some(build_postcond_call));
-        let then_block = self.arena.alloc(self.expr_block(then_block_stmts));
-
-        let none_expr = self.arena.alloc(self.expr_enum_variant_lang_item(
-            span,
-            rustc_hir::lang_items::LangItem::OptionNone,
-            Default::default(),
-        ));
-        let else_block = self.block_expr(none_expr);
-        let else_block = self.arena.alloc(self.expr_block(else_block));
+        let then_block =
+            self.contract_check_with_postcond_block_expr(stmts, postcond_checker, span);
+        let else_block = self.option_none_block(span);
 
         let contract_check = rustc_hir::ExprKind::If(
             self.arena.alloc(self.expr_bool_literal(span, self.tcx.sess.contract_checks())),
@@ -271,6 +238,81 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             Some(else_block),
         );
         self.arena.alloc(self.expr(span, contract_check))
+    }
+
+    fn contract_check_with_postcond_span(
+        &mut self,
+        stmts: &mut [rustc_hir::Stmt<'hir>],
+        postcond_checker: &mut rustc_hir::Expr<'_>,
+    ) -> rustc_span::Span {
+        // For error diagnostics, span is set to decls + precondition, because
+        // those will determine the well-typedness of the __ensures_builder
+        // closure. postcond_checker is already type-checked as part of the
+        // call to build_check_ensures.
+        let span =
+            span_of_stmts(stmts, stmts.last().map(|s| s.span).unwrap_or(postcond_checker.span));
+        self.mark_span_with_reason(
+            rustc_span::DesugaringKind::Contract,
+            span,
+            Some(Arc::clone(&self.allow_contracts)),
+        )
+    }
+
+    fn contract_check_with_postcond_block_expr(
+        &mut self,
+        stmts: &'hir mut [rustc_hir::Stmt<'hir>],
+        postcond_checker: &'hir mut rustc_hir::Expr<'_>,
+        span: rustc_span::Span,
+    ) -> &'hir mut rustc_hir::Expr<'hir> {
+        let (builder_decl, builder_ident_expr) =
+            self.contract_check_with_postcond_builder(stmts, postcond_checker, span);
+
+        let build_postcond_call = self.expr_call_lang_item_fn(
+            span,
+            rustc_hir::LangItem::ContractCheckRequiresAndBuildEnsures,
+            &*arena_vec![self; *builder_ident_expr],
+        );
+        let block_stmts =
+            self.block_all(span, arena_vec![self; builder_decl], Some(build_postcond_call));
+        self.arena.alloc(self.expr_block(block_stmts))
+    }
+
+    fn contract_check_with_postcond_builder(
+        &mut self,
+        stmts: &'hir mut [rustc_hir::Stmt<'hir>],
+        postcond_checker: &'hir mut rustc_hir::Expr<'_>,
+        span: rustc_span::Span,
+    ) -> (rustc_hir::Stmt<'hir>, &'hir rustc_hir::Expr<'hir>) {
+        let then_block_closure =
+            self.contract_check_with_postcond_builder_block(stmts, postcond_checker, span);
+
+        let (builder_ident, builder_hir_id, builder_decl) =
+            self.bind_expression(then_block_closure, span, "__ensures_builder");
+        let builder_ident_expr = self.expr_ident(span, builder_ident, builder_hir_id);
+
+        (builder_decl, builder_ident_expr)
+    }
+
+    fn contract_check_with_postcond_builder_block(
+        &mut self,
+        stmts: &'hir mut [rustc_hir::Stmt<'hir>],
+        postcond_checker: &'hir mut rustc_hir::Expr<'_>,
+        span: rustc_span::Span,
+    ) -> &'hir mut rustc_hir::Expr<'hir> {
+        let stmts = self.block_all(span, stmts, Some(postcond_checker));
+        let stmts = self.expr_block(stmts);
+        let closure = self.expr_closure(span, stmts);
+        self.arena.alloc(closure)
+    }
+
+    fn option_none_block(&mut self, span: rustc_span::Span) -> &'hir mut rustc_hir::Expr<'hir> {
+        let none_expr = self.arena.alloc(self.expr_enum_variant_lang_item(
+            span,
+            rustc_hir::lang_items::LangItem::OptionNone,
+            Default::default(),
+        ));
+        let else_block = self.block_expr(none_expr);
+        self.arena.alloc(self.expr_block(else_block))
     }
 
     fn wrap_body_with_contract_check(
