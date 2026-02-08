@@ -2346,11 +2346,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
         span: Span,
         body_expr: hir::Expr<'hir>,
     ) -> hir::Expr<'hir> {
-        // 1. Generate a NodeId for the closure itself.
         let closure_node_id = self.next_node_id();
 
-        // 2. Register the definition. 'create_def' is usually handled by the Resolver,
-        // but if you are forced to do it here, you MUST map the NodeId to a HirId.
         let closure_def_id = self.create_def(
             closure_node_id,
             None,
@@ -2360,15 +2357,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
         );
 
         let hir_id = self.lower_node_id(closure_node_id);
+        let body_id = self.lower_body(|_| (Default::default(), body_expr));
 
-        // 3. Lower the body. This is the "magic" part.
-        // 'lower_body' handles registering the BodyId and the 'bodies' map.
-        let body_id = self.lower_body(|_| {
-            // We return any arguments (none here) and the expression itself.
-            (Default::default(), body_expr)
-        });
-
-        // 4. Construct the FnDecl (Closure signature)
         let fn_decl = self.arena.alloc(hir::FnDecl {
             inputs: &[],
             output: hir::FnRetTy::DefaultReturn(span),
@@ -2377,7 +2367,6 @@ impl<'hir> LoweringContext<'_, 'hir> {
             lifetime_elision_allowed: true,
         });
 
-        // 5. Build the Closure metadata
         let closure = self.arena.alloc(hir::Closure {
             def_id: closure_def_id,
             binder: hir::ClosureBinder::Default,
@@ -2391,7 +2380,6 @@ impl<'hir> LoweringContext<'_, 'hir> {
             kind: hir::ClosureKind::Closure,
         });
 
-        // 6. Return the final Expression
         hir::Expr { hir_id, kind: hir::ExprKind::Closure(closure), span }
     }
 
