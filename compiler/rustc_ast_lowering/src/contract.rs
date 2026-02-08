@@ -225,8 +225,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         ));
         let span = self.contract_check_with_postcond_span(stmts, postcond_checker);
 
-        let then_block =
-            self.contract_check_with_postcond_block_expr(stmts, postcond_checker, span);
+        let then_block = self.contract_check_with_postcond_block(stmts, postcond_checker, span);
         let else_block = self.option_none_block(span);
 
         let contract_check = rustc_hir::ExprKind::If(
@@ -255,7 +254,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         )
     }
 
-    fn contract_check_with_postcond_block_expr(
+    fn contract_check_with_postcond_block(
         &mut self,
         stmts: &'hir mut [rustc_hir::Stmt<'hir>],
         postcond_checker: &'hir mut rustc_hir::Expr<'_>,
@@ -280,17 +279,17 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         postcond_checker: &'hir mut rustc_hir::Expr<'_>,
         span: rustc_span::Span,
     ) -> (rustc_hir::Stmt<'hir>, &'hir rustc_hir::Expr<'hir>) {
-        let then_block_closure =
-            self.contract_check_with_postcond_builder_block(stmts, postcond_checker, span);
+        let block_closure =
+            self.contract_check_with_postcond_builder_closure(stmts, postcond_checker, span);
 
         let (builder_ident, builder_hir_id, builder_decl) =
-            self.bind_expression(then_block_closure, span, "__ensures_builder");
+            self.bind_expression(block_closure, span, "__ensures_builder");
         let builder_ident_expr = self.expr_ident(span, builder_ident, builder_hir_id);
 
         (builder_decl, builder_ident_expr)
     }
 
-    fn contract_check_with_postcond_builder_block(
+    fn contract_check_with_postcond_builder_closure(
         &mut self,
         stmts: &'hir mut [rustc_hir::Stmt<'hir>],
         postcond_checker: &'hir mut rustc_hir::Expr<'_>,
